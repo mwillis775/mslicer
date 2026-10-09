@@ -8,7 +8,7 @@ use crate::{
     geometry::{
         Hit, Primitive,
         bvh::{LEAF_SIZE, Ray},
-        triangle::{closest_point, triangle_intersection},
+        triangle::{closest_point, segment_triangle_distance_sq, triangle_intersection},
     },
     mesh::{Mesh, MeshInner},
 };
@@ -105,6 +105,56 @@ impl BvhNode {
                     right.closest(arena, mesh, point, out);
                     left.closest(arena, mesh, point, out);
                 }
+            }
+        }
+    }
+}
+
+impl BvhNode {
+    /// Returns true if any face is within `radius` of the segment `a→b`.
+    pub fn near_segment(
+        &self,
+        arena: &[BvhNode],
+        mesh: &Mesh,
+        (a, b): (Vector3<f32>, Vector3<f32>),
+        radius: f32,
+    ) -> bool {
+        if !self.bounds().near_segment(a, b, radius) {
+            return false;
+        }
+
+        match self {
+            BvhNode::Leaf { faces, .. } => faces.iter().any(|&face| {
+                segment_triangle_distance_sq(mesh.face_verts_raw(face), (a, b)) < radius * radius
+            }),
+            BvhNode::Node { left, right, .. } => {
+                arena[*left].near_segment(arena, mesh, (a, b), radius)
+                    || arena[*right].near_segment(arena, mesh, (a, b), radius)
+            }
+        }
+    }
+
+    /// Finds the squared distance from the segment `a→b` to the closest face,
+    /// only considering faces closer than `out`.
+    pub fn segment_distance(
+        &self,
+        arena: &[BvhNode],
+        mesh: &Mesh,
+        (a, b): (Vector3<f32>, Vector3<f32>),
+        out: &mut f32,
+    ) {
+        if !self.bounds().near_segment(a, b, out.sqrt()) {
+            return;
+        }
+
+        match self {
+            BvhNode::Leaf { faces, .. } => faces.iter().for_each(|&face| {
+                let dist = segment_triangle_distance_sq(mesh.face_verts_raw(face), (a, b));
+                *out = out.min(dist);
+            }),
+            BvhNode::Node { left, right, .. } => {
+                arena[*left].segment_distance(arena, mesh, (a, b), out);
+                arena[*right].segment_distance(arena, mesh, (a, b), out);
             }
         }
     }

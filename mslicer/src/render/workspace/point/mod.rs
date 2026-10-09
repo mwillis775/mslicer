@@ -19,16 +19,18 @@ use crate::{
             bind_group,
         },
         util::{ResizingBuffer, gpu_mesh_buffers},
-        workspace::point::target::TargetPointDispatch,
+        workspace::point::{failed_supports::FailedSupportsDispatch, target::TargetPointDispatch},
     },
 };
 
+mod failed_supports;
 mod target;
 
 pub struct PointDispatch {
     render_pipeline: PointPipeline,
 
     target_point: TargetPointDispatch,
+    failed_supports: FailedSupportsDispatch,
 }
 
 const INSTANCE_BUFFER_LAYOUT: VertexBufferLayout = VertexBufferLayout {
@@ -97,16 +99,18 @@ impl PointDispatch {
             render_pipeline: PointPipeline::new(device, texture),
 
             target_point: TargetPointDispatch::new(),
+            failed_supports: FailedSupportsDispatch::new(),
         }
     }
 
     pub fn prepare(&mut self, gcx: &Gcx, app: &mut App) {
-        let dispatches: &mut [&mut dyn PointGenerator] = &mut [&mut self.target_point];
+        let dispatches: &mut [&mut dyn PointGenerator] =
+            &mut [&mut self.target_point, &mut self.failed_supports];
         for dispatch in dispatches.iter_mut() {
             dispatch.generate_points(app);
         }
 
-        let points = &[self.target_point.points()][..];
+        let points = &[self.target_point.points(), self.failed_supports.points()][..];
         self.render_pipeline.prepare(gcx, app, points);
     }
 

@@ -1,5 +1,5 @@
 use egui::{
-    Color32, Context, DragAndDrop, Id, Label, LayerId, Order, Rect, Sense, Ui, UiBuilder, Widget,
+    Context, DragAndDrop, Id, Label, LayerId, Order, Rect, Sense, Ui, UiBuilder, Widget,
     emath::TSTransform, vec2,
 };
 use egui_phosphor::regular::{FOLDER, FOLDER_OPEN};
@@ -97,7 +97,8 @@ pub fn collection_entry(
 
     ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
         ui.horizontal(|ui| {
-            ui.visuals_mut().override_text_color = selected.then_some(Color32::WHITE);
+            let selected_color = ui.visuals().selection.stroke.color;
+            ui.visuals_mut().override_text_color = selected.then_some(selected_color);
             ui.visuals_mut().button_frame = false;
 
             if ui

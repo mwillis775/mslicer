@@ -25,12 +25,13 @@ pub struct UiState {
     // support stuff
     pub workspace: WorkspaceHover,
     pub hovered_geometry: Option<GeometryHit>,
-    pub support_mode: bool,
 
     pub selected: SelectedModel,
     pub selected_printer: SelectedPrinter,
     pub selected_supports: SelectedSupports,
     pub support_preview: Option<Mesh>,
+    /// Why a support can't be placed where the cursor is hovering.
+    pub support_preview_error: Option<&'static str>,
 
     pub selected_remap_point: Option<u8>,
 

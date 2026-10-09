@@ -274,10 +274,13 @@ impl BasePass {
 
             if model.supports.get_buffers(&gcx.device).is_some() {
                 let (mesh, support_faces) = model.supports.mesh().as_ref().unwrap();
-                let model_transform = mesh.transformation_matrix();
+                let model_transform = *mesh.transformation_matrix();
                 let uniform = Uniforms {
                     transform: view_projection * model_transform,
+                    model_transform,
                     model_color: invert_color(model.color).into(),
+                    // Supports aren't meant to be printed without supports.
+                    overhang_angle: f32::from_bits(u32::MAX),
                     id: base.id | 1 << 31,
                     ..base
                 };
@@ -315,9 +318,10 @@ impl BasePass {
             let mut out = vec![(base.clone(), Selected::for_model(model).into_inner())];
             if model.supports.get_buffers(&gcx.device).is_some() {
                 let mesh = &model.supports.mesh().as_ref().unwrap().0;
-                let model_transform = mesh.transformation_matrix();
+                let model_transform = *mesh.transformation_matrix();
                 let uniform = Uniforms {
                     transform: view_projection * model_transform,
+                    model_transform,
                     model_color: invert_color(model.color).into(),
                     ..base
                 };

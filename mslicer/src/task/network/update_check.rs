@@ -15,6 +15,7 @@ use crate::{
     interface::{
         components::button_row,
         popup::{Popup, PopupIcon},
+        theme::Palette,
     },
     task::{PollResult, Task, TaskApp, thread::TaskThread},
 };
@@ -81,7 +82,9 @@ impl Task for UpdateCheck {
                             .show(ui, |ui| {
                                 let icon = PopupIcon::Info;
                                 ui.label(
-                                    RichText::new(icon.as_char()).size(30.0).color(icon.color()),
+                                    RichText::new(icon.as_char())
+                                        .size(30.0)
+                                        .color(icon.color(&Palette::of(ui))),
                                 );
                                 ui.horizontal_wrapped(|ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;

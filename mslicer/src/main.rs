@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use eframe::NativeOptions;
-use egui::{FontDefinitions, Vec2, ViewportBuilder};
+use egui::{Vec2, ViewportBuilder};
 use egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
 use tracing::{info, level_filters::LevelFilter};
 use tracing_subscriber::{filter, fmt::layer, layer::SubscriberExt, util::SubscriberInitExt};
@@ -115,9 +115,7 @@ fn main() -> Result<()> {
             ..Default::default()
         },
         Box::new(|cc| {
-            let mut fonts = FontDefinitions::default();
-            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-            cc.egui_ctx.set_fonts(fonts);
+            interface::theme::install_fonts(&cc.egui_ctx);
 
             egui_extras::install_image_loaders(&cc.egui_ctx);
 

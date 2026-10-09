@@ -1,8 +1,8 @@
 use std::mem;
 
 use egui::{
-    Align, Button, Color32, Context, Grid, Id, Label, Layout, RichText, Ui, UiBuilder, Widget,
-    WidgetText, Window, vec2,
+    Align, Button, Context, Grid, Id, Label, Layout, RichText, Ui, UiBuilder, Widget, WidgetText,
+    Window, vec2,
 };
 use egui_phosphor::regular::X;
 use remote_print::manager::RemotePrintManager;
@@ -13,7 +13,7 @@ use crate::{
         App, config::Config, history::History, is_slicing, project::Project, slice::SliceOperation,
         state::UiState,
     },
-    interface::{components::button_row, panels::Panels},
+    interface::{components::button_row, panels::Panels, theme::Palette},
     render::camera::Camera,
     task::TaskManager,
 };
@@ -168,7 +168,11 @@ impl Popup {
                 Grid::new(ui.id().with("grid"))
                     .num_columns(2)
                     .show(ui, |ui| {
-                        ui.label(RichText::new(icon.as_char()).size(30.0).color(icon.color()));
+                        ui.label(
+                            RichText::new(icon.as_char())
+                                .size(30.0)
+                                .color(icon.color(&Palette::of(ui))),
+                        );
                         ui.add(Label::new(body.clone()).wrap());
                     });
                 ui.add_space(5.0);
@@ -200,12 +204,12 @@ impl PopupIcon {
         }
     }
 
-    pub fn color(&self) -> egui::Color32 {
+    pub fn color(&self, palette: &Palette) -> egui::Color32 {
         match self {
-            Self::Info => Color32::from_rgb(150, 200, 210),
-            Self::Warning => Color32::from_rgb(230, 220, 140),
-            Self::Error => Color32::from_rgb(200, 90, 90),
-            Self::Success => Color32::from_rgb(140, 230, 140),
+            Self::Info => palette.sky,
+            Self::Warning => palette.amber,
+            Self::Error => palette.red,
+            Self::Success => palette.text,
         }
     }
 }

@@ -144,3 +144,89 @@ pub fn closest_point([v0, v1, v2]: [Vector3<f32>; 3], point: Vector3<f32>) -> Ve
 
     u * v0 + v * v1 + w * v2
 }
+
+/// Returns the closest points between segments `p1→q1` and `p2→q2` as
+/// `(point_on_first, point_on_second)`.
+///
+/// Reference: "Closest Points of Two Line Segments" from Real-Time Collision Detection by Christer Ericson
+pub fn closest_points_segments(
+    (p1, q1): (Vector3<f32>, Vector3<f32>),
+    (p2, q2): (Vector3<f32>, Vector3<f32>),
+) -> (Vector3<f32>, Vector3<f32>) {
+    const EPSILON: f32 = 1e-12;
+
+    let d1 = q1 - p1;
+    let d2 = q2 - p2;
+    let r = p1 - p2;
+    let a = d1.magnitude_squared();
+    let e = d2.magnitude_squared();
+    let f = d2.dot(&r);
+
+    let (s, t) = if a <= EPSILON && e <= EPSILON {
+        (0.0, 0.0)
+    } else if a <= EPSILON {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(&r);
+        if e <= EPSILON {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(&d2);
+            let denom = a * e - b * b;
+
+            let mut s = if denom > EPSILON {
+                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+
+            (s, t)
+        }
+    };
+
+    (p1 + d1 * s, p2 + d2 * t)
+}
+
+/// Returns the squared distance between the segment `a→b` and a triangle.
+/// This is exact: the minimum is either zero (the segment pierces the
+/// triangle), between an endpoint and the triangle's face, or between the
+/// segment and one of the triangle's edges.
+pub fn segment_triangle_distance_sq(
+    tri @ [v0, v1, v2]: [Vector3<f32>; 3],
+    (a, b): (Vector3<f32>, Vector3<f32>),
+) -> f32 {
+    let normal = (v1 - v0).cross(&(v2 - v0));
+    let (da, db) = (normal.dot(&(a - v0)), normal.dot(&(b - v0)));
+
+    // Segment endpoints are on opposite sides of the plane, check if the
+    // crossing point is inside the triangle.
+    if (da <= 0.0) != (db <= 0.0) && da != db {
+        let point = a + (b - a) * (da / (da - db));
+        let c0 = (v1 - v0).cross(&(point - v0));
+        let c1 = (v2 - v1).cross(&(point - v1));
+        let c2 = (v0 - v2).cross(&(point - v2));
+        if normal.dot(&c0) >= 0.0 && normal.dot(&c1) >= 0.0 && normal.dot(&c2) >= 0.0 {
+            return 0.0;
+        }
+    }
+
+    let mut best = (closest_point(tri, a) - a)
+        .magnitude_squared()
+        .min((closest_point(tri, b) - b).magnitude_squared());
+
+    for edge in [(v0, v1), (v1, v2), (v2, v0)] {
+        let (p, q) = closest_points_segments((a, b), edge);
+        best = best.min((p - q).magnitude_squared());
+    }
+
+    best
+}

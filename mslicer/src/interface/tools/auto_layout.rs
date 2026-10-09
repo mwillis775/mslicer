@@ -4,15 +4,14 @@ use common::{
     geometry::convex_hull,
     units::{Milimeter, Milimeters},
 };
-use egui::{
-    Button, CollapsingHeader, Color32, ComboBox, DragValue, Ui, Widget, emath::OrderedFloat, vec2,
-};
+use egui::{Button, CollapsingHeader, ComboBox, DragValue, Ui, Widget, emath::OrderedFloat, vec2};
 use egui_plot::{Line, Plot};
 use nalgebra::{Rotation3, Scale3, Vector2, Vector3};
 use tools::auto_layout::{self, Hull, LayoutCache, Objective, Placement, Rotation};
 
 use crate::{
     core::{App, project::model::Model},
+    interface::theme::Palette,
     interface::{
         components::grid,
         popup::{Popup, PopupApp},
@@ -127,7 +126,7 @@ fn interface(app: &mut PopupApp, ui: &mut Ui) -> bool {
                             .map(|(x, y)| [*x as f64, y.log2() as f64])
                             .filter(|p| p[1].is_finite())
                             .collect::<Vec<_>>();
-                        plot.add(Line::new("", points).color(Color32::WHITE));
+                        plot.add(Line::new("", points).color(Palette::for_ctx(plot.ctx()).text));
                     });
             });
 

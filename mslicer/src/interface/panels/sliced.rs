@@ -39,6 +39,7 @@ use crate::{
         },
         state::UiState,
     },
+    interface::theme::Palette,
     interface::{
         components::{collapsing_toggle, dragger, grid},
         panels::slice_config::exposure_config,
@@ -932,10 +933,10 @@ fn sidebar(
                         [(x + 1) as f64, area.get::<Centimeter>() as f64]
                     })
                     .collect::<Vec<_>>();
-                plot.add(Line::new("", series).color(Color32::WHITE));
+                plot.add(Line::new("", series).color(Palette::for_ctx(plot.ctx()).text));
                 plot.add(
                     VLine::new("", (state.preview_layer - 1) as f32)
-                        .color(Color32::RED)
+                        .color(Palette::for_ctx(plot.ctx()).red)
                         .style(LineStyle::Dashed { length: 4.0 }),
                 );
             });
@@ -963,10 +964,10 @@ fn sidebar(
                 .allow_boxed_zoom(false)
                 .view_aspect(3.0)
                 .show(ui, |plot| {
-                    plot.add(Line::new("", defects).color(Color32::WHITE));
+                    plot.add(Line::new("", defects).color(Palette::for_ctx(plot.ctx()).text));
                     plot.add(
                         VLine::new("", (state.preview_layer - 1) as f32)
-                            .color(Color32::RED)
+                            .color(Palette::for_ctx(plot.ctx()).red)
                             .style(LineStyle::Dashed { length: 4.0 }),
                     );
                 });

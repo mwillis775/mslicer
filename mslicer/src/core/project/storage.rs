@@ -6,6 +6,7 @@ use nalgebra::Vector3;
 use crate::core::project::{
     Collection, CollectionId, PostProcessing, Project, RenameState,
     model::{MeshUnit, Model},
+    supports::Supports,
 };
 use common::{
     progress::Progress,
@@ -18,10 +19,18 @@ use slicer::{
         elephant_foot_fixer::ElephantFootFixer, variable_layer_height::VariableLayerHeight,
     },
 };
+use tools::supports::{Support, settings::SupportSettings};
 
 /// Project format version. Value should be incremented whenever the save format
 /// changes, even in development so anyone using the dev/prerelease versions
 /// don't ruin their projects.
+///
+/// ## v17 (v0.10.0)
+/// Support styles (tree, lattice, needles), tree settings and per-point
+/// support radii.
+///
+/// ## v16 (v0.10.0)
+/// Store support settings and each model's supports.
 ///
 /// ## v15 (v0.10.0)
 /// Store first layers and transition layers as either a layer count or a united
@@ -70,7 +79,7 @@ use slicer::{
 /// ## v2 (v0.5.0)
 /// A complete rewrite using a custom serilizer/deserilizer because of the
 /// bincode drama...
-const VERSION: u16 = 15;
+const VERSION: u16 = 17;
 
 struct ModelInfo {
     mesh: u32,
@@ -207,6 +216,14 @@ impl Project {
 
         ser.write_u32_be(self.collections.len() as u32);
         self.collections.iter().for_each(|c| c.serialize(ser));
+
+        self.support_settings.serialize(ser);
+        for model in self.models.iter() {
+            let supports = model.supports.list();
+            ser.write_u32_be(supports.len() as u32);
+            supports.iter().for_each(|x| x.serialize(ser));
+        }
+
         progress.set_finished();
     }
 
@@ -231,12 +248,12 @@ impl Project {
             .map(|_| Arc::new(deserialize_mesh_inner(des, &progress)))
             .collect::<Vec<_>>();
 
-        let models = (models.into_iter())
+        let mut models = (models.into_iter())
             .map(|x| {
                 let mesh = meshes[x.mesh as usize].clone();
                 x.into_model(mesh)
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         let collections = (0..des.read_u32_be())
             .map(|_| Collection::deserialize(des))
@@ -247,11 +264,25 @@ impl Project {
             CollectionId::bump_past(max_id + 1);
         }
 
+        let support_settings = if version < 16 {
+            SupportSettings::default()
+        } else {
+            let format = if version < 17 { 1 } else { 2 };
+            let settings = SupportSettings::deserialize(des, format);
+            for model in models.iter_mut() {
+                let supports = (0..des.read_u32_be())
+                    .map(|_| Support::deserialize(des, format))
+                    .collect();
+                model.supports = Supports::loaded(supports, &model.mesh);
+            }
+            settings
+        };
+
         progress.set_finished();
         Ok(Self {
             path: None,
             slice_config,
-            support_config: Default::default(),
+            support_settings,
             post_processing,
             models,
             collections,

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egui::{Theme, ViewportCommand, Visuals};
+use egui::ViewportCommand;
 use egui_tracing::EventCollector;
 use egui_wgpu::RenderState;
 use nalgebra::Vector3;
@@ -154,14 +154,7 @@ impl eframe::App for App {
         self.popup().render(ctx);
         self.tasks().poll();
 
-        // todo: only update the visuals if the theme has changed?
-        ctx.set_visuals(Visuals {
-            collapsing_header_frame: true,
-            ..match self.config.ui.theme {
-                Theme::Dark => Visuals::dark(),
-                Theme::Light => Visuals::light(),
-            }
-        });
+        interface::theme::apply(ctx, self.config.ui.theme);
 
         model::process_previews(self);
         interface::ui(self, ctx);

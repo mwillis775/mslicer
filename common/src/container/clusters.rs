@@ -74,15 +74,21 @@ impl<T: Hash + PartialEq + Eq + Copy> Clusters<T> {
     }
 }
 
+/// Disjoint set (union-find) over the integers `0..size`, using path
+/// compression and union by size so operations are effectively constant time
+/// even for long chains of unions.
+///
 /// Reference: <https://people.engr.tamu.edu/djimenez/ut/utsa/cs3343/lecture18.html>
 pub struct ArrayCluster {
     arr: Vec<u32>,
+    size: Vec<u32>,
 }
 
 impl ArrayCluster {
     pub fn new(size: usize) -> Self {
         Self {
             arr: (0..size as u32).collect::<Vec<_>>(),
+            size: vec![1; size],
         }
     }
 
@@ -94,21 +100,36 @@ impl ArrayCluster {
         &mut self.arr[id as usize]
     }
 
-    pub fn find(&mut self, mut id: u32) -> u32 {
-        let start = id;
-        let mut parent = self.parent(id);
-        while id != parent {
-            id = parent;
-            parent = self.parent(id);
+    pub fn find(&mut self, id: u32) -> u32 {
+        let mut root = id;
+        while self.parent(root) != root {
+            root = self.parent(root);
         }
 
-        *self.parent_mut(start) = id;
-        id
+        // Point everything along the path directly at the root.
+        let mut id = id;
+        while id != root {
+            let next = self.parent(id);
+            *self.parent_mut(id) = root;
+            id = next;
+        }
+
+        root
     }
 
     pub fn union(&mut self, a: u32, b: u32) {
         let (a, b) = (self.find(a), self.find(b));
-        *self.parent_mut(a) = b;
+        if a == b {
+            return;
+        }
+
+        let (small, large) = if self.size[a as usize] < self.size[b as usize] {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        *self.parent_mut(small) = large;
+        self.size[large as usize] += self.size[small as usize];
     }
 
     pub fn clusters(mut self) -> impl Iterator<Item = HashSet<u32>> {

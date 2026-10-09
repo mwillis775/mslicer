@@ -11,6 +11,7 @@ use nalgebra::Vector3;
 use wgpu::Device;
 
 use slicer::{geometry::bvh::Bvh, half_edge::HalfEdgeMesh, mesh::Mesh};
+use tools::supports::settings::SupportSettings;
 
 use crate::{
     core::project::{CollectionId, RenameState, supports::Supports},
@@ -178,6 +179,10 @@ impl Model {
         self.base_volume.get_or_insert(volume);
     }
 
+    pub fn update_supports(&mut self, settings: &SupportSettings) {
+        (self.supports).update(&self.mesh, self.bvh.as_ref(), settings);
+    }
+
     pub fn mesh_memory_size(&self) -> usize {
         self.mesh.memory_size()
             + (self.bvh.as_ref().map(|x| x.memory_size())).unwrap_or_default()
@@ -194,12 +199,6 @@ impl Model {
     }
 
     pub fn update_oob(&mut self, platform: &Vector3<Milimeters>) {
-        self.supports.set_transform(
-            self.mesh.position(),
-            self.mesh.scale(),
-            self.mesh.rotation(),
-        );
-
         let (min, max) = self.mesh.bounds();
         let half = platform.map(|x| x.raw()) / 2.0;
 
@@ -312,7 +311,7 @@ impl Clone for Model {
             mesh: self.mesh.clone(),
             bvh: self.bvh.clone(),
             half_edge: self.half_edge.clone(),
-            supports: Supports::default(),
+            supports: self.supports.duplicate(),
             base_volume: self.base_volume,
 
             unit: self.unit,

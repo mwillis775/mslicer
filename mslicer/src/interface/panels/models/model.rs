@@ -6,8 +6,8 @@ use common::{
 };
 use const_format::concatcp;
 use egui::{
-    CollapsingHeader, Color32, ComboBox, Context, DragValue, Label, Popup, Response, Sense,
-    TextEdit, Ui, UiBuilder, Widget, text::CCursorRange, vec2,
+    CollapsingHeader, ComboBox, Context, DragValue, Label, Popup, Response, Sense, TextEdit, Ui,
+    UiBuilder, Widget, text::CCursorRange, vec2,
 };
 use egui_phosphor::regular::{
     ARROW_LINE_DOWN, ARROWS_COUNTER_CLOCKWISE, BANDAIDS, COPY, CUBE, CURSOR_TEXT, DICE_THREE, EYE,
@@ -79,7 +79,8 @@ pub fn model_entry(
         UiBuilder::new().max_rect(rect.with_min_x(rect.min.x + [0.0, 12.0][indent as usize]));
     ui.scope_builder(ui_builder, |ui| {
         ui.horizontal(|ui| {
-            ui.visuals_mut().override_text_color = selected.then_some(Color32::WHITE);
+            let selected_color = ui.visuals().selection.stroke.color;
+            ui.visuals_mut().override_text_color = selected.then_some(selected_color);
             ui.visuals_mut().button_frame = false;
 
             if ui

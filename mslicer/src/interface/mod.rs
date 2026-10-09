@@ -10,6 +10,7 @@ pub mod elements;
 pub mod panels;
 pub mod popup;
 pub mod shortcuts;
+pub mod theme;
 pub mod tools;
 
 pub fn ui(app: &mut App, ctx: &Context) {
@@ -19,6 +20,7 @@ pub fn ui(app: &mut App, ctx: &Context) {
     CentralPanel::default().frame(Frame::NONE).show(ctx, |ui| {
         let mut dock_state = app.panels.take_inner();
         DockArea::new(&mut dock_state)
+            .style(theme::dock_style(&ctx.style()))
             .show_leaf_close_all_buttons(false)
             .show_leaf_collapse_buttons(false)
             .tab_context_menus(false)

@@ -8,7 +8,9 @@ use common::container::Run;
 use egui::Color32;
 use parking_lot::{Mutex, MutexGuard};
 
-pub const ISLAND_COLOR: Color32 = Color32::from_rgb(159, 44, 54);
+use crate::interface::theme;
+
+pub const ISLAND_COLOR: Color32 = theme::DARK.red;
 
 #[derive(Default)]
 pub struct Annotations {

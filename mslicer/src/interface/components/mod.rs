@@ -6,9 +6,12 @@ use egui::{
 };
 use egui_phosphor::regular::LINK;
 
-use crate::core::{
-    history::{Action, History, ModelAction},
-    project::model::ModelId,
+use crate::{
+    core::{
+        history::{Action, History, ModelAction},
+        project::model::ModelId,
+    },
+    interface::theme::Palette,
 };
 
 pub mod chart;
@@ -28,6 +31,24 @@ pub fn labeled_separator(ui: &mut Ui, text: &str) {
         ui.label(text);
         ui.add_sized([bar, 1.0], Separator::default().horizontal());
     });
+}
+
+/// A small heading above a group of controls.
+pub fn section(ui: &mut Ui, text: &str) {
+    ui.add_space(4.0);
+    let palette = Palette::of(ui);
+    ui.label(
+        RichText::new(text.to_uppercase())
+            .small()
+            .color(palette.weak),
+    );
+}
+
+/// The main action of a panel, filled with the text color so it stands out.
+pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
+    let palette = Palette::of(ui);
+    let text = RichText::new(text).color(palette.on_accent()).strong();
+    ui.add(Button::new(text).fill(palette.text))
 }
 
 pub fn grid(id_salt: &str) -> Grid {

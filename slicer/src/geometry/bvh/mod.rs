@@ -86,4 +86,31 @@ impl Bvh {
 
         self.intersect::<primitive::Segment>(mesh, ray)
     }
+
+    /// Checks if any face of the mesh is closer than `radius` to the segment
+    /// `a→b`. All inputs are in mesh-local (untransformed) space.
+    pub fn near_segment_local(
+        &self,
+        mesh: &Mesh,
+        (a, b): (Vector3<f32>, Vector3<f32>),
+        radius: f32,
+    ) -> bool {
+        (self.nodes.last()).is_some_and(|root| root.near_segment(&self.nodes, mesh, (a, b), radius))
+    }
+
+    /// Returns the distance from the segment `a→b` to the closest face of the
+    /// mesh, or `max` if nothing is closer than that. All inputs are in
+    /// mesh-local (untransformed) space.
+    pub fn segment_distance_local(
+        &self,
+        mesh: &Mesh,
+        (a, b): (Vector3<f32>, Vector3<f32>),
+        max: f32,
+    ) -> f32 {
+        let mut out = max * max;
+        if let Some(root) = self.nodes.last() {
+            root.segment_distance(&self.nodes, mesh, (a, b), &mut out);
+        }
+        out.sqrt()
+    }
 }

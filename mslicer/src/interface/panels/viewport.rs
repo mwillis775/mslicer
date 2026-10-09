@@ -11,7 +11,11 @@ use crate::{
         config::ui::HoverOverlay,
         state::{GeometryHit, Tool, WorkspaceHover},
     },
-    interface::{components::grid, panels::supports::manual_support_placement},
+    interface::{
+        components::grid,
+        panels::supports::{delete_selected, manual_support_placement},
+        theme::Palette,
+    },
     render::{interface::basis::BasisRenderCallback, workspace::WorkspaceRenderCallback},
 };
 
@@ -37,7 +41,19 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     let uv = (px - rect.min) / rect.size();
     app.state.workspace = WorkspaceHover::new(is_moving, aspect, uv);
 
-    (app.state.tool == Tool::Support).then(|| manual_support_placement(app, false));
+    if app.state.tool == Tool::Support {
+        manual_support_placement(app, false);
+    } else {
+        app.state.support_preview = None;
+        app.state.support_preview_error = None;
+    }
+
+    if app.state.selected_supports.count() > 0
+        && !ui.ctx().wants_keyboard_input()
+        && ui.input(|x| x.key_pressed(Key::Delete) || x.key_pressed(Key::Backspace))
+    {
+        delete_selected(app);
+    }
     if response.clicked() && !is_moving {
         match app.state.tool {
             Tool::Select => {
@@ -168,7 +184,7 @@ fn paint_hover_overlay(ui: &mut Ui, app: &mut App, hover: GeometryHit, px: Pos2)
                 .corner_radius(ui.visuals().menu_corner_radius)
                 .fill(Color32::BLACK.lerp_to_gamma(Color32::TRANSPARENT, 0.25))
                 .show(ui, |ui| {
-                    ui.style_mut().visuals.override_text_color = Some(Color32::WHITE);
+                    ui.style_mut().visuals.override_text_color = Some(Palette::of(ui).text);
                     ui.set_max_width(300.0);
 
                     let Some(model) = app.project.model(hover.model) else {
@@ -188,7 +204,16 @@ fn paint_hover_overlay(ui: &mut Ui, app: &mut App, hover: GeometryHit, px: Pos2)
                             ui.end_row();
                         }
 
-                        if detail {
+                        if app.state.tool == Tool::Support
+                            && let Some(error) = app.state.support_preview_error
+                        {
+                            ui.label("Support");
+                            ui.label(error);
+                            ui.end_row();
+                        }
+
+                        // Face indices of supports don't refer to the model.
+                        if detail && !hover.support {
                             ui.label("Face");
                             let [a, b, c] = model.mesh.face(hover.face as usize);
                             ui.label(format!("{} ({a}, {b}, {c})", hover.face));

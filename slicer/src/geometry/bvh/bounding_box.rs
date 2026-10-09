@@ -92,4 +92,31 @@ impl BoundingBox {
 
         dist_sq
     }
+
+    /// Checks if the segment `a→b` passes within `radius` of this box. This is
+    /// conservative (the box is expanded on each axis rather than rounded), so
+    /// it may return true for segments slightly further than `radius` away.
+    pub fn near_segment(&self, a: Vector3<f32>, b: Vector3<f32>, radius: f32) -> bool {
+        let (min, max) = (self.min.add_scalar(-radius), self.max.add_scalar(radius));
+        let direction = b - a;
+        let (mut t_min, mut t_max) = (0.0_f32, 1.0_f32);
+
+        for i in 0..3 {
+            if direction[i].abs() > 1e-12 {
+                let inv = direction[i].recip();
+                let t0 = (min[i] - a[i]) * inv;
+                let t1 = (max[i] - a[i]) * inv;
+                let (t0, t1) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+                t_min = t_min.max(t0);
+                t_max = t_max.min(t1);
+                if t_min > t_max {
+                    return false;
+                }
+            } else if a[i] < min[i] || a[i] > max[i] {
+                return false;
+            }
+        }
+
+        true
+    }
 }

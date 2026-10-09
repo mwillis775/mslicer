@@ -8,12 +8,11 @@ use common::{
     id_type,
     progress::CombinedProgress,
     slice::{Layer, SliceConfig},
-    units::Milimeters,
 };
 use slicer::post_process::{
     elephant_foot_fixer::ElephantFootFixer, variable_layer_height::VariableLayerHeight,
 };
-use tools::supports::{auto::PlacementConfig, mesh::SupportPreset};
+use tools::supports::settings::SupportSettings;
 
 pub mod model;
 pub mod storage;
@@ -23,21 +22,10 @@ pub mod supports;
 pub struct Project {
     pub path: Option<PathBuf>,
     pub slice_config: SliceConfig,
-    pub support_config: SupportConfig,
+    pub support_settings: SupportSettings,
     pub post_processing: PostProcessing,
     pub models: Vec<Model>,
     pub collections: Vec<Collection>,
-}
-
-#[derive(Clone)]
-pub struct SupportConfig {
-    pub auto_placement: PlacementConfig,
-    pub presets: Vec<SupportPreset>,
-    pub mesh_resolution: u32,
-
-    pub default_lift: Milimeters,
-    pub raft_height: Milimeters,
-    pub raft_offset: Milimeters,
 }
 
 #[derive(Default, Clone)]
@@ -75,6 +63,7 @@ impl Project {
         self.path = None;
         self.slice_config = default_config.clone();
         self.post_processing = Default::default();
+        self.support_settings = Default::default();
         self.models.clear();
         self.collections.clear();
     }
@@ -88,8 +77,8 @@ impl Project {
     }
 
     pub fn update(&mut self) {
-        let res = self.support_config.mesh_resolution;
-        (self.models.iter_mut()).for_each(|x| x.supports.set_resolution(res));
+        let settings = &self.support_settings;
+        (self.models.iter_mut()).for_each(|x| x.update_supports(settings));
     }
 }
 
@@ -154,19 +143,5 @@ id_type!(CollectionId, u32);
 impl PartialEq for Collection {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
-    }
-}
-
-impl Default for SupportConfig {
-    fn default() -> Self {
-        Self {
-            auto_placement: PlacementConfig::default(),
-            presets: vec![SupportPreset::default()],
-            mesh_resolution: 20,
-
-            default_lift: Milimeters::new(5.0),
-            raft_height: Milimeters::new(1.0),
-            raft_offset: Milimeters::new(1.0),
-        }
     }
 }

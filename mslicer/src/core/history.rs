@@ -25,6 +25,7 @@ use crate::{
         project::{
             Collection, CollectionId,
             model::{Model, ModelId},
+            supports::Snapshot,
         },
     },
 };
@@ -67,6 +68,12 @@ pub enum Action {
     CollectionRemoved {
         index: usize,
         collection: Collection,
+    },
+    /// A model's supports were changed, stores the previous supports.
+    Supports {
+        model: ModelId,
+        name: &'static str,
+        supports: Snapshot,
     },
 }
 
@@ -139,6 +146,14 @@ impl History {
         self.constrain_size();
         self.history.push_back(action);
         self.future.clear();
+    }
+
+    pub fn track_supports(&mut self, model: ModelId, name: &'static str, supports: Snapshot) {
+        self.track(Action::Supports {
+            model,
+            name,
+            supports,
+        });
     }
 
     pub fn track_model(&mut self, id: ModelId, action: ModelAction) {
@@ -216,6 +231,7 @@ impl Action {
             Self::CollectionRemoved { collection, .. } => {
                 ActionDescription::new("Removed Collection").with_extra(collection.name.clone())
             }
+            Self::Supports { name, .. } => ActionDescription::new(name),
         }
     }
 
@@ -247,6 +263,20 @@ impl Action {
                 Some(Self::CollectionAdded { id })
             }
             Self::SliceConfig(action) => action.undo(app).map(Action::SliceConfig),
+            Self::Supports {
+                model,
+                name,
+                supports,
+            } => {
+                let target = app.project.models.iter_mut().find(|x| x.id == model)?;
+                let supports = target.supports.restore(supports);
+                app.state.selected_supports.clear();
+                Some(Self::Supports {
+                    model,
+                    name,
+                    supports,
+                })
+            }
         }
     }
 }

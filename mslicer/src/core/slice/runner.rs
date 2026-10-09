@@ -21,6 +21,16 @@ use slicer::{
 
 impl App {
     pub fn slice(&mut self) {
+        let visible = self.project.models.iter().filter(|x| !x.hidden);
+        if visible.clone().any(|x| !x.supports.is_ready()) {
+            self.popup.open(Popup::simple(
+                "Supports Not Ready",
+                PopupIcon::Warning,
+                "Supports are still being updated for a model that was moved. Try again in a moment.",
+            ));
+            return;
+        }
+
         let meshes = (self.project.models.iter_mut())
             .filter(|x| !x.hidden)
             .map(|x| (x.supports.mesh().clone(), x.clone()))

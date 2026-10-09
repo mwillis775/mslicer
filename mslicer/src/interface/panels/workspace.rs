@@ -1,7 +1,7 @@
 use common::units::Milimeter;
 use const_format::concatcp;
 use egui::{
-    Align, CollapsingHeader, Color32, ComboBox, Context, DragValue, Grid, Layout, Theme, Ui, Widget,
+    Align, CollapsingHeader, ComboBox, Context, DragValue, Grid, Layout, Theme, Ui, Widget,
 };
 use egui_phosphor::regular::{ARROW_COUNTER_CLOCKWISE, ARROWS_CLOCKWISE, FOLDER, INFO};
 use egui_plot::{Line, Plot};
@@ -21,6 +21,7 @@ use crate::{
         dragger::{self, dragger},
         grid,
     },
+    interface::theme::Palette,
     system::memory::MemoryBreakdown,
 };
 
@@ -392,7 +393,7 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                     .enumerate()
                     .map(|(x, y)| [x as f64, y as f64])
                     .collect::<Vec<_>>();
-                plot.add(Line::new("", series).color(Color32::WHITE));
+                plot.add(Line::new("", series).color(Palette::for_ctx(plot.ctx()).text));
             });
         ui.add_space(4.0);
     });

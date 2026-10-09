@@ -2,7 +2,7 @@ use std::f32;
 
 use const_format::concatcp;
 use egui::{
-    Color32, Context, DragAndDrop, Frame, Key, Response, ScrollArea, Sense, Stroke, StrokeKind,
+    Context, DragAndDrop, Frame, Key, Response, ScrollArea, Sense, Stroke, StrokeKind,
     TopBottomPanel, Ui, Vec2,
 };
 use egui_phosphor::regular::{COPY, CURSOR_TEXT, EYE, EYE_SLASH, FOLDER_DASHED, SELECTION, TRASH};
@@ -13,9 +13,12 @@ use crate::{
         history::{Action, ModelAction},
         project::{Collection, CollectionId, RenameState},
     },
-    interface::panels::models::{
-        collection::{collection, collection_entry},
-        model::model_properties,
+    interface::{
+        panels::models::{
+            collection::{collection, collection_entry},
+            model::model_properties,
+        },
+        theme::Palette,
     },
 };
 
@@ -114,7 +117,7 @@ pub fn ui(app: &mut App, ui: &mut Ui, ctx: &Context) {
                 .find(|(_, rect)| rect.contains(pointer))
                 .map(|&(id, rect)| (id, rect));
 
-            let stroke = Stroke::new(1.0_f32, Color32::WHITE);
+            let stroke = Stroke::new(1.0_f32, Palette::of(ui).sky);
             if let Some((coll_id, header_rect)) = header_target {
                 ui.painter()
                     .rect_stroke(header_rect, 2.0, stroke, StrokeKind::Outside);
