@@ -76,8 +76,8 @@ impl ModelPicker {
         }
 
         let pos = Origin3d {
-            x: (uv.x * size.width as f32).round() as u32,
-            y: (uv.y * size.height as f32).round() as u32,
+            x: ((uv.x * size.width as f32) as u32).min(size.width - 1),
+            y: ((uv.y * size.height as f32) as u32).min(size.height - 1),
             z: 0,
         };
 
