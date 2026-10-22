@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use const_format::concatcp;
 use egui::{Align, Checkbox, Context, DragValue, Layout, Response, RichText, Slider, Ui, Widget};
 use egui_phosphor::regular::{
-    ARROW_COUNTER_CLOCKWISE, ARROWS_CLOCKWISE, COLUMNS, GRID_FOUR, NEEDLE, PUSH_PIN,
-    SELECTION_INVERSE, SPARKLE, TRASH, TREE, WARNING,
+    ARROW_COUNTER_CLOCKWISE, ARROWS_CLOCKWISE, COLUMNS, COMPASS, GRID_FOUR, MAGIC_WAND, NEEDLE,
+    PAINT_BUCKET, PUSH_PIN, SELECTION_INVERSE, SPARKLE, TRASH, TREE, WARNING,
 };
 use nalgebra::Vector3;
 use slicer::builder::MeshBuilder;
 use tools::supports::{
-    Contact, SupportId,
+    Contact, Support, SupportId,
     collider::Collider,
     generate::new_support,
     mesh::SupportMesh,
@@ -32,7 +32,7 @@ use crate::{
         components::{grid, primary_button, section},
         theme::Palette,
     },
-    task::GenerateSupports,
+    task::{AutoOrient, GenerateSupports},
 };
 
 const OVERHANG_TIP: &str = "Surfaces that are within this angle of horizontal are supported.";
@@ -64,6 +64,11 @@ const CONTACT_TIP: &str = "How fine the point touching the model is. Finer tips 
 const BRANCH_ANGLE_TIP: &str = "Maximum angle of a branch from vertical.";
 const MERGE_DISTANCE_TIP: &str = "Branches further apart than this aren't merged.";
 const TRUNK_TIP: &str = "Trunks thicken as branches merge into them, up to this diameter.";
+const GAP_FILL_TIP: &str = "Spots that can't be supported normally, like gaps too narrow for a support tip or pockets with no way down to the build plate, are filled in with solid resin instead. The fill becomes part of the print.";
+const GAP_FILL_HEIGHT_TIP: &str =
+    "Gaps taller than this aren't filled, so whole cavities aren't made solid. Zero for no limit.";
+const ORIENT_TIP: &str = "Rotate the model so it needs as few supports as possible, with as much of it as possible able to reach the build plate. The model keeps its spin around Z, and existing supports are cleared.";
+const ORIENT_GENERATE_TIP: &str = "Auto orient the model, then generate supports for it.";
 
 pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     let palette = Palette::of(ui);
@@ -73,13 +78,28 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         _ => format!("{} selected model{}", targets.len(), plural(targets.len())),
     };
 
-    let (supports, failed) = (targets.iter())
-        .filter_map(|&id| app.project.models.iter().find(|x| x.id == id))
-        .fold((0, 0), |(s, f), x| {
-            (s + x.supports.len(), f + x.supports.failed().len())
-        });
+    let (mut supports, mut fills, mut fill_area, mut failed) = (0, 0, 0.0, 0);
+    let models = (targets.iter()).filter_map(|&id| app.project.models.iter().find(|x| x.id == id));
+    for model in models {
+        failed += model.supports.failed().len();
+        for support in model.supports.list() {
+            match &support.route.fill {
+                Some(fill) => (fills, fill_area) = (fills + 1, fill_area + fill.area()),
+                None => supports += 1,
+            }
+        }
+    }
+
+    let fill_text = (fills > 0)
+        .then(|| {
+            format!(
+                " and {fills} gap fill{} ({fill_area:.1} mm²)",
+                plural(fills)
+            )
+        })
+        .unwrap_or_default();
     ui.label(format!(
-        "{supports} support{} on {target_text}.",
+        "{supports} support{}{fill_text} on {target_text}.",
         plural(supports)
     ));
     if failed > 0 {
@@ -87,7 +107,7 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
             "{WARNING} {failed} spot{} couldn't be supported, shown in red.",
             plural(failed)
         )).color(palette.amber))
-        .on_hover_text("These are usually inside enclosed areas, or in gaps too narrow for a support. Try reorienting the model, using smaller supports, or allowing model landing.");
+        .on_hover_text("These are usually inside enclosed areas, or in gaps too narrow for a support. Try auto orienting the model, using smaller supports, allowing model landing, or turning on gap fill.");
     }
 
     let settings = &mut app.project.support_settings;
@@ -96,6 +116,13 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
 
     section(ui, "Tuning");
     tuning_ui(settings, ui);
+
+    ui.add_space(4.0);
+    ui.checkbox(
+        &mut settings.gap_fill.enabled,
+        concatcp!(PAINT_BUCKET, " Fill gaps that can't be supported"),
+    )
+    .on_hover_text(GAP_FILL_TIP);
 
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
@@ -121,6 +148,26 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         });
     });
 
+    ui.horizontal_wrapped(|ui| {
+        ui.add_enabled_ui(!targets.is_empty(), |ui| {
+            if ui
+                .button(concatcp!(COMPASS, " Auto Orient"))
+                .on_hover_text(ORIENT_TIP)
+                .clicked()
+            {
+                auto_orient(app, &targets, false);
+            }
+
+            if ui
+                .button(concatcp!(MAGIC_WAND, " Orient & Generate"))
+                .on_hover_text(ORIENT_GENERATE_TIP)
+                .clicked()
+            {
+                auto_orient(app, &targets, true);
+            }
+        });
+    });
+
     section(ui, "Selection");
     selection_ui(app, ui);
 
@@ -136,6 +183,7 @@ fn style_icon(style: SupportStyle) -> &'static str {
         SupportStyle::Lattice => GRID_FOUR,
         SupportStyle::Mini => NEEDLE,
         SupportStyle::Needle => PUSH_PIN,
+        SupportStyle::Fill => PAINT_BUCKET,
     }
 }
 
@@ -272,6 +320,24 @@ fn generate(app: &mut App, targets: &[ModelId]) {
     }
 }
 
+fn auto_orient(app: &mut App, targets: &[ModelId], generate: bool) {
+    let settings = &app.project.support_settings;
+    let platform = &app.project.slice_config.platform_size;
+    for &id in targets {
+        let Some(model) = app.project.models.iter().find(|x| x.id == id) else {
+            continue;
+        };
+
+        match AutoOrient::new(model, settings, platform, generate) {
+            Some(task) => app.tasks.add(task),
+            None => tracing::warn!(
+                "Acceleration structures for `{}` aren't ready yet",
+                model.name
+            ),
+        }
+    }
+}
+
 fn clear(app: &mut App, targets: &[ModelId]) {
     for &id in targets {
         let Some(model) = app.project.models.iter_mut().find(|x| x.id == id) else {
@@ -298,14 +364,19 @@ fn apply(app: &mut App, targets: &[ModelId]) {
             continue;
         };
 
-        if (model.supports.list().iter()).all(|x| x.size == size && x.style == style) {
+        // Gap fill columns keep their own shape.
+        let fill = |x: &&Support| x.style == SupportStyle::Fill;
+        if (model.supports.list().iter())
+            .filter(|x| !fill(x))
+            .all(|x| x.size == size && x.style == style)
+        {
             continue;
         }
 
         // Clearing the routed transform makes every support get re-routed
         // (and trees re-grown) with its new style and size.
         let mut snapshot = model.supports.snapshot();
-        for support in snapshot.supports.iter_mut() {
+        for support in snapshot.supports.iter_mut().filter(|x| !fill(&&**x)) {
             support.style = style;
             support.size = size;
         }
@@ -540,6 +611,21 @@ fn settings_ui(settings: &mut SupportSettings, ui: &mut Ui) {
                 ui.end_row();
             });
         })
+    });
+
+    ui.collapsing("Gap Fill", |ui| {
+        grid("support_gap_fill").show(ui, |ui| {
+            let gap_fill = &mut settings.gap_fill;
+            ui.label("Gap Fill").on_hover_text(GAP_FILL_TIP);
+            ui.checkbox(&mut gap_fill.enabled, "");
+            ui.end_row();
+
+            ui.add_enabled_ui(gap_fill.enabled, |ui| {
+                ui.label("Max Height").on_hover_text(GAP_FILL_HEIGHT_TIP)
+            });
+            ui.add_enabled_ui(gap_fill.enabled, |ui| mm(&mut gap_fill.max_height, ui));
+            ui.end_row();
+        });
     });
 
     ui.collapsing("Mesh", |ui| {

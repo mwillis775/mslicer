@@ -75,6 +75,11 @@ pub enum Action {
         name: &'static str,
         supports: Snapshot,
     },
+    /// Several actions that are undone and redone together.
+    Group {
+        name: &'static str,
+        actions: Vec<Action>,
+    },
 }
 
 #[derive(Clone, PartialEq)]
@@ -101,9 +106,18 @@ pub enum ModelAction {
     Position(Vector3<f32>),
     Scale(Vector3<f32>),
     Rotation(Vector3<f32>),
+    /// Position, scale, and rotation changed together.
+    Transform(Transform),
     RelativeExposure(u8),
     Collection(Option<CollectionId>),
     Move(usize, Option<CollectionId>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transform {
+    pub position: Vector3<f32>,
+    pub scale: Vector3<f32>,
+    pub rotation: Vector3<f32>,
 }
 
 impl History {
@@ -137,15 +151,23 @@ impl History {
     }
 
     pub fn track(&mut self, action: Action) {
-        if let Action::ModelRemoved { model, .. } = &action
-            && (model.mesh.memory_size() / B_PER_MIB) as u32 > self.max_mesh_size
-        {
+        if self.too_large(&action) {
             return;
         }
 
         self.constrain_size();
         self.history.push_back(action);
         self.future.clear();
+    }
+
+    fn too_large(&self, action: &Action) -> bool {
+        match action {
+            Action::ModelRemoved { model, .. } => {
+                (model.mesh.memory_size() / B_PER_MIB) as u32 > self.max_mesh_size
+            }
+            Action::Group { actions, .. } => actions.iter().any(|x| self.too_large(x)),
+            _ => false,
+        }
     }
 
     pub fn track_supports(&mut self, model: ModelId, name: &'static str, supports: Snapshot) {
@@ -163,11 +185,11 @@ impl History {
     pub fn memory_size(&self, loaded_models: &HashMap<MeshId, usize>) -> usize {
         let mut models = 0;
         for action in self.history.iter().chain(self.future.iter()) {
-            if let Action::ModelRemoved { model, .. } = action
-                && !loaded_models.contains_key(&model.mesh.mesh_id())
-            {
-                models += model.mesh_memory_size();
-            }
+            action.removed_models(&mut |model| {
+                if !loaded_models.contains_key(&model.mesh.mesh_id()) {
+                    models += model.mesh_memory_size();
+                }
+            });
         }
 
         (self.future.capacity() + self.history.capacity()) * mem::size_of::<Action>() + models
@@ -232,6 +254,20 @@ impl Action {
                 ActionDescription::new("Removed Collection").with_extra(collection.name.clone())
             }
             Self::Supports { name, .. } => ActionDescription::new(name),
+            Self::Group { name, actions } => match actions.as_slice() {
+                [single] => single.description(),
+                _ => ActionDescription::new(name),
+            },
+        }
+    }
+
+    fn removed_models(&self, callback: &mut impl FnMut(&Model)) {
+        match self {
+            Self::ModelRemoved { model, .. } => callback(model),
+            Self::Group { actions, .. } => {
+                (actions.iter()).for_each(|x| x.removed_models(callback))
+            }
+            _ => {}
         }
     }
 
@@ -276,6 +312,14 @@ impl Action {
                     name,
                     supports,
                 })
+            }
+            // Undone in reverse, so the redo actions come out in the order
+            // they need to be undone in for a redo.
+            Self::Group { name, actions } => {
+                let actions = (actions.into_iter().rev())
+                    .filter_map(|x| x.undo(app))
+                    .collect::<Vec<_>>();
+                Some(Self::Group { name, actions })
             }
         }
     }
@@ -357,6 +401,7 @@ impl ModelAction {
             Self::Position(_) => ActionDescription::new("Moved Model"),
             Self::Scale(_) => ActionDescription::new("Scaled Model"),
             Self::Rotation(_) => ActionDescription::new("Rotated Model"),
+            Self::Transform(_) => ActionDescription::new("Transformed Model"),
             Self::RelativeExposure(_) => ActionDescription::new("Changed Model Exposure"),
             Self::Collection(_) => ActionDescription::new("Changed Model Collection"),
             Self::Move(..) => ActionDescription::new("Moved Model"),
@@ -388,6 +433,11 @@ impl ModelAction {
                 model.set_rotation(platform_size, matrix);
                 Self::Rotation(old)
             }
+            Self::Transform(transform) => {
+                let old = Transform::of(model);
+                transform.apply(model, platform_size);
+                Self::Transform(old)
+            }
             Self::RelativeExposure(exposure) => {
                 Self::RelativeExposure(mem::replace(&mut model.exposure, exposure))
             }
@@ -409,5 +459,23 @@ impl ModelAction {
 impl From<SliceConfigAction> for Action {
     fn from(value: SliceConfigAction) -> Self {
         Self::SliceConfig(value)
+    }
+}
+
+impl Transform {
+    pub fn of(model: &Model) -> Self {
+        Self {
+            position: model.mesh.position(),
+            scale: model.mesh.scale(),
+            rotation: model.mesh.rotation(),
+        }
+    }
+
+    pub fn apply(&self, model: &mut Model, platform: &Vector3<Milimeters>) {
+        model.mesh.set_position_unchecked(self.position);
+        model.mesh.set_scale_unchecked(self.scale);
+        model.mesh.set_rotation_unchecked(self.rotation);
+        model.mesh.update_transformation_matrix();
+        model.update_oob(platform);
     }
 }

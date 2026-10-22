@@ -77,6 +77,24 @@ impl Bvh {
         self.intersect::<primitive::Ray>(mesh, Ray { origin, direction })
     }
 
+    /// Counts the faces a ray crosses, as the winding number of its origin:
+    /// +1 for each face it leaves the mesh through (facing along the ray) and
+    /// -1 for each it enters through. Every face is counted, including ones
+    /// that lie on top of each other. With the nonzero rule, the origin is
+    /// inside the mesh if this isn't zero.
+    pub fn ray_winding(&self, mesh: &Mesh, origin: Vector3<f32>, direction: Vector3<f32>) -> i32 {
+        let ray = Ray {
+            origin: mesh.inv_transform(&origin),
+            direction: mesh.inv_transform_normal(&direction),
+        };
+
+        let mut out = 0;
+        if let Some(root) = self.nodes.last() {
+            root.winding(&self.nodes, mesh, ray, &mut out);
+        }
+        out
+    }
+
     pub fn intersect_segment(&self, mesh: &Mesh, a: Vector3<f32>, b: Vector3<f32>) -> Option<Hit> {
         let (a, b) = (mesh.inv_transform(&a), mesh.inv_transform(&b));
         let ray = Ray {

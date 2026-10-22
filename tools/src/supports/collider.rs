@@ -6,6 +6,10 @@ use crate::supports::Contact;
 /// Rays used to measure thickness start this far inside the surface, so they
 /// don't hit the surface they start on.
 const THICKNESS_EPSILON: f32 = 1e-3;
+/// Direction crossings are counted in. It's slightly off vertical so it
+/// doesn't pass exactly along the edges of axis aligned meshes, where hits
+/// could be missed or counted twice.
+const CROSSING_DIRECTION: Vector3<f32> = Vector3::new(0.0123, 0.0071, 1.0);
 
 /// Collision queries against a transformed mesh, in that mesh's world space.
 ///
@@ -57,6 +61,15 @@ impl<'a> Collider<'a> {
             point: self.mesh.transform(&hit.position),
             normal: self.face_normal(hit.face),
         })
+    }
+
+    /// Whether a point is outside the model. This counts the surfaces crossed
+    /// on the way up from the point, using the same nonzero winding rule as the
+    /// slicer. Unlike looking at the normal of the nearest surface, this works
+    /// for meshes that overlap themselves.
+    pub fn is_empty(&self, point: Vector3<f32>) -> bool {
+        let direction = CROSSING_DIRECTION.normalize();
+        self.bvh.ray_winding(self.mesh, point, direction) == 0
     }
 
     /// How far the model extends inward from a point on its surface, up to

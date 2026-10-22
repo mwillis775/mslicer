@@ -23,6 +23,8 @@ pub struct RemotePrintConfig {
     pub udp_port: u16,
 
     pub alert_completion: bool,
+    /// Start printing as soon as a file sent from the slice preview arrives.
+    pub print_after_upload: bool,
     pub webhook: Webhook,
 }
 
@@ -73,6 +75,7 @@ impl Default for RemotePrintConfig {
     fn default() -> Self {
         Self {
             alert_completion: false,
+            print_after_upload: true,
             init_at_startup: false,
             status_proxy: false,
             timeout: 5.0,

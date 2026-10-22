@@ -17,7 +17,7 @@ use slicer::{builder::MeshBuilder, mesh::Mesh};
 use crate::supports::{
     Brace, Foot, Support, SupportId,
     routing::foot_top,
-    settings::{SupportSettings, SupportSize},
+    settings::{SupportSettings, SupportSize, SupportStyle},
 };
 
 /// Which faces of the support mesh belong to each support.
@@ -113,6 +113,10 @@ impl<'a> SupportMesh<'a> {
     }
 
     pub fn add_support(&mut self, support: &Support) {
+        if support.style == SupportStyle::Fill {
+            return self.add_fill(support);
+        }
+
         let size = &support.size;
         let top = support.column_top();
         let column_r = support.column_radius();
@@ -180,6 +184,11 @@ impl<'a> SupportMesh<'a> {
         }
     }
 
+    /// A solid filling the gap, see [`crate::supports::fill`].
+    fn add_fill(&mut self, support: &Support) {
+        (support.route.fill.iter()).for_each(|x| x.add_to(&mut self.builder));
+    }
+
     /// Radius of the flared base under a support's column. Thick tree trunks
     /// get wider bases.
     fn base_radius(&self, support: &Support) -> f32 {
@@ -201,7 +210,7 @@ impl<'a> SupportMesh<'a> {
         let base = &self.settings.base;
         let mut seen = HashSet::new();
         let bases = (supports.iter())
-            .filter(|x| x.route.foot == Foot::Plate)
+            .filter(|x| x.route.foot == Foot::Plate && x.style != SupportStyle::Fill)
             .map(|x| (x.column_top().xy(), self.base_radius(x)))
             .filter(|(center, _)| seen.insert(center.map(f32::to_bits)))
             .collect::<Vec<_>>();

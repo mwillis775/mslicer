@@ -29,6 +29,7 @@ nanodlp_format.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 clone-macro.workspace = true
+earcutr.workspace = true
 image.workspace = true
 imageproc.workspace = true
 itertools.workspace = true

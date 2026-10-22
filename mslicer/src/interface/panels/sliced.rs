@@ -56,7 +56,7 @@ use common::{
     serde::DynamicSerializer,
     slice::{
         Layer, SliceConfig, SliceMode,
-        format::{CtbFormat, Format, RasterFormat},
+        format::{Format, RasterFormat},
         print_time,
     },
     units::{Centimeter, Micrometer, Milimeter},
@@ -153,14 +153,18 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                                             &Progress::new(),
                                             &result.config,
                                             &slice_operation.preview(),
-                                            RasterFormat::Ctb(CtbFormat::Encrypted).into(),
+                                            client.format.into(),
                                         );
 
                                         let mut serializer = DynamicSerializer::new();
                                         file.serialize(&mut serializer, &Progress::new());
                                         let data = Arc::new(serializer.into_inner());
 
-                                        app.popup.open(name_popup(client.mainboard.clone(), data));
+                                        app.popup.open(name_popup(
+                                            client.mainboard.clone(),
+                                            data,
+                                            client.format,
+                                        ));
                                     }
                                 }
                             });
@@ -495,7 +499,7 @@ fn layer_slider(state: &mut UiState, ui: &mut egui::Ui, result: &mut RasterSlice
     );
 }
 
-fn name_popup(mainboard_id: String, data: Arc<Vec<u8>>) -> Popup {
+fn name_popup(mainboard_id: String, data: Arc<Vec<u8>>, format: RasterFormat) -> Popup {
     Popup::new("Remote Send", move |app, ui| {
         ui.horizontal(|ui| {
             ui.label("File Name:");
@@ -504,6 +508,11 @@ fn name_popup(mainboard_id: String, data: Arc<Vec<u8>>) -> Popup {
 
         ui.add_space(5.0);
         ui.label(FILENAME_POPUP_TEXT);
+        ui.add_space(5.0);
+        ui.checkbox(
+            &mut app.config.remote_print.print_after_upload,
+            "Start printing when the upload finishes",
+        );
         ui.add_space(5.0);
 
         let spacing = ui.style().spacing.item_spacing.x;
@@ -528,7 +537,8 @@ fn name_popup(mainboard_id: String, data: Arc<Vec<u8>>) -> Popup {
                                 &mainboard_id,
                                 data.clone(),
                                 name,
-                                RasterFormat::Ctb(CtbFormat::Encrypted),
+                                format,
+                                app.config.remote_print.print_after_upload,
                             )
                             .unwrap();
                     }

@@ -41,7 +41,35 @@ pub struct Island {
 }
 
 pub fn find_islands(collider: &Collider, plate_z: f32, spacing: f32) -> Vec<Island> {
-    let mesh = collider.mesh();
+    islands(collider, collider.mesh(), plate_z, spacing, (0.0, false))
+}
+
+/// Finds islands in `mesh`, which can be the collider's mesh combined with
+/// other parts (like its supports) to check what is still left hanging.
+/// Contacts are only found on the collider's mesh.
+///
+/// This uses the same, stricter, test as the slicer's island detection: a
+/// region is only held up by pixels directly below it, not ones diagonally
+/// below. Very small islands also only show up at some pixel and layer
+/// alignments, which are shifted by `phase` (from 0 to 1) of a pixel and a
+/// layer.
+pub fn find_islands_in(
+    collider: &Collider,
+    mesh: &Mesh,
+    plate_z: f32,
+    spacing: f32,
+    phase: f32,
+) -> Vec<Island> {
+    islands(collider, mesh, plate_z, spacing, (phase, true))
+}
+
+fn islands(
+    collider: &Collider,
+    mesh: &Mesh,
+    plate_z: f32,
+    spacing: f32,
+    (phase, strict): (f32, bool),
+) -> Vec<Island> {
     let (min, max) = mesh.bounds();
     if mesh.face_count() == 0 || max.z <= min.z {
         return Vec::new();
@@ -49,13 +77,13 @@ pub fn find_islands(collider: &Collider, plate_z: f32, spacing: f32) -> Vec<Isla
 
     // Raster space: origin at the bounding box corner with a two pixel
     // margin, x/y scaled to pixels, z unchanged.
-    let origin = min.xy() - Vector2::repeat(PIXEL_SIZE * 2.0);
+    let origin = min.xy() - Vector2::repeat(PIXEL_SIZE * (2.0 + phase));
     let size = ((max.xy() - origin) / PIXEL_SIZE).map(|x| x.ceil() as u32 + 2);
     let raster_mesh = to_raster_space(mesh, origin);
     let segments = Segments1D::from_mesh(&raster_mesh, SEGMENT_LAYERS);
 
     let layers = ((max.z - min.z) / LAYER_HEIGHT).ceil() as usize;
-    let height = |i: usize| min.z + (i as f32 + 0.5) * LAYER_HEIGHT;
+    let height = |i: usize| min.z + (i as f32 + 0.5 + phase) * LAYER_HEIGHT;
 
     let mut islands = Vec::new();
     let mut prev: Rows = vec![Vec::new(); size.y as usize];
@@ -68,7 +96,7 @@ pub fn find_islands(collider: &Collider, plate_z: f32, spacing: f32) -> Vec<Isla
         for (i, rows) in chunk.iter().zip(rows) {
             let z = height(*i);
             if z - plate_z > LAYER_HEIGHT * 1.5 {
-                for pixels in unsupported_regions(&rows, &prev) {
+                for pixels in unsupported_regions(&rows, &prev, strict) {
                     islands.push(to_island(collider, &pixels, (origin, z), spacing));
                 }
             }
@@ -139,7 +167,7 @@ fn spans_touch(a: (u32, u32), b: (u32, u32)) -> bool {
 /// Groups the filled pixels of `rows` into connected regions, and returns the
 /// spans of each region that doesn't touch anything in the `prev` layer. Spans
 /// are returned as `(row, (start, end))`.
-fn unsupported_regions(rows: &Rows, prev: &Rows) -> Vec<Vec<(usize, (u32, u32))>> {
+fn unsupported_regions(rows: &Rows, prev: &Rows, strict: bool) -> Vec<Vec<(usize, (u32, u32))>> {
     let mut offsets = Vec::with_capacity(rows.len());
     let mut spans = Vec::new();
     for (row, row_spans) in rows.iter().enumerate() {
@@ -171,7 +199,7 @@ fn unsupported_regions(rows: &Rows, prev: &Rows) -> Vec<Vec<(usize, (u32, u32))>
     let mut supported = vec![false; spans.len()];
     for (idx, &(row, span)) in spans.iter().enumerate() {
         let root = clusters.find(idx as u32) as usize;
-        if !supported[root] && touches(prev, row, span) {
+        if !supported[root] && touches(prev, row, span, strict) {
             supported[root] = true;
         }
     }
@@ -188,12 +216,23 @@ fn unsupported_regions(rows: &Rows, prev: &Rows) -> Vec<Vec<(usize, (u32, u32))>
 }
 
 /// Checks if a span touches any span in the same or adjacent rows of a layer.
-fn touches(layer: &Rows, row: usize, span: (u32, u32)) -> bool {
-    let rows = row.saturating_sub(1)..(row + 2).min(layer.len());
+/// If `strict`, the span has to overlap one in the same row.
+fn touches(layer: &Rows, row: usize, span: (u32, u32), strict: bool) -> bool {
+    let rows = if strict {
+        row..(row + 1).min(layer.len())
+    } else {
+        row.saturating_sub(1)..(row + 2).min(layer.len())
+    };
     (layer.get(rows).unwrap_or_default().iter()).any(|spans| {
         // First span ending at or after this one starts.
         let i = spans.partition_point(|other| other.1 < span.0);
-        spans.get(i).is_some_and(|&other| spans_touch(span, other))
+        spans.get(i).is_some_and(|&other| {
+            if strict {
+                span.0 < other.1 && other.0 < span.1
+            } else {
+                spans_touch(span, other)
+            }
+        })
     })
 }
 
@@ -235,6 +274,9 @@ fn to_island(
             let xy = origin + pixel * PIXEL_SIZE;
             let below = xy.push(z - LAYER_HEIGHT * 3.0);
             let hit = collider.ray(below, Vector3::z())?;
+            // Meshes that overlap themselves can have surfaces facing either
+            // way, but seen from below the island, this is its underside.
+            let hit = Contact::new(hit.point, hit.normal * -hit.normal.z.signum());
             (hit.point.z <= z + LAYER_HEIGHT * 2.0).then_some(hit)
         })
         .collect();

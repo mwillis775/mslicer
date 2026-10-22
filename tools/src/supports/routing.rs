@@ -16,6 +16,7 @@ use nalgebra::Vector3;
 use crate::supports::{
     Contact, Foot, Route,
     collider::Collider,
+    fill,
     settings::{SupportSettings, SupportSize, SupportStyle},
 };
 
@@ -77,6 +78,10 @@ impl<'a> Router<'a> {
         style: SupportStyle,
         size: &SupportSize,
     ) -> Result<Route, RouteError> {
+        if style == SupportStyle::Fill {
+            return fill::route(self.collider, self.settings, self.plate_z, contact);
+        }
+
         let size = &self.routing_size(style, size);
         let shaft_r = size.shaft_radius();
         let min_z = self.settings.column_bottom(self.plate_z) + shaft_r;

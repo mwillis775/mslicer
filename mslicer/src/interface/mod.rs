@@ -6,7 +6,9 @@ use egui_dock::DockArea;
 use crate::{core::App, interface::panels::Tabs};
 
 pub mod components;
+pub mod cut;
 pub mod elements;
+pub mod gizmo;
 pub mod panels;
 pub mod popup;
 pub mod shortcuts;

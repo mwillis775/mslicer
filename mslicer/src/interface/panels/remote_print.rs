@@ -5,11 +5,13 @@ use clone_macro::clone;
 use common::{misc::human_duration, slice::format::RasterFormat, units::Miliseconds};
 use const_format::concatcp;
 use egui::{
-    Align, CollapsingHeader, ComboBox, Context, DragValue, FontSelection, Layout, OutputCommand,
-    ProgressBar, RichText, Separator, Spinner, Style, TextEdit, Ui, text::LayoutJob, vec2,
+    Align, CollapsingHeader, ComboBox, Context, DragValue, FontSelection, Image, Layout,
+    OutputCommand, ProgressBar, RichText, Separator, Spinner, Style, TextEdit, Ui,
+    load::SizedTexture, text::LayoutJob, vec2,
 };
 use egui_phosphor::regular::{
-    COPY, NETWORK, PAUSE, PLAY, PLUGS, PRINTER, STOP, TRASH_SIMPLE, UPLOAD_SIMPLE,
+    ARROW_CLOCKWISE, COPY, NETWORK, PAUSE, PLAY, PLUGS, PRINTER, STOP, TRASH_SIMPLE, UPLOAD_SIMPLE,
+    VIDEO_CAMERA, VIDEO_CAMERA_SLASH,
 };
 use notify_rust::Notification;
 use remote_print::{
@@ -20,7 +22,12 @@ use rfd::FileDialog;
 use tracing::{info, warn};
 
 use crate::{
-    core::{App, config::peripherals::ContentType, state::RemotePrintConnectStatus},
+    core::{
+        App,
+        config::peripherals::ContentType,
+        printer_camera::{CameraState, PrinterCamera},
+        state::RemotePrintConnectStatus,
+    },
     interface::{
         components::grid,
         popup::{Popup, PopupIcon},
@@ -39,6 +46,8 @@ enum Action {
     Pause(String),
     Resume(String),
     Stop(String),
+    ToggleCamera(String),
+    RetryCamera(String),
 }
 
 pub(crate) fn initialize(app: &mut App) {
@@ -105,6 +114,17 @@ pub fn ui(app: &mut App, ui: &mut Ui, ctx: &Context) {
                     action = Action::UploadFile {
                         mainboard_id: client.mainboard.clone(),
                     };
+                }
+
+                if client.has_camera {
+                    let open = app.state.printer_cameras.contains_key(&client.mainboard);
+                    let (icon, hover) = match open {
+                        true => (VIDEO_CAMERA_SLASH, "Hide Camera"),
+                        false => (VIDEO_CAMERA, "Show Camera"),
+                    };
+                    if ui.button(icon).on_hover_text(hover).clicked() {
+                        action = Action::ToggleCamera(client.mainboard.clone());
+                    }
                 }
 
                 let mut job = LayoutJob::default();
@@ -197,6 +217,12 @@ pub fn ui(app: &mut App, ui: &mut Ui, ctx: &Context) {
                                 .desired_width(ui.available_width()),
                             );
 
+                            ui.add_space(8.0);
+                        }
+
+                        if let Some(camera) = app.state.printer_cameras.get_mut(&client.mainboard) {
+                            camera_ui(camera, client, ui, ctx)
+                                .then(|| action = Action::RetryCamera(client.mainboard.clone()));
                             ui.add_space(8.0);
                         }
 
@@ -305,7 +331,25 @@ pub fn ui(app: &mut App, ui: &mut Ui, ctx: &Context) {
         );
 
         if let Err(e) = match action {
-            Action::Remove(c) => app.remote_print.remove_printer(&c),
+            Action::Remove(c) => {
+                app.state.printer_cameras.remove(&c);
+                app.remote_print.remove_printer(&c)
+            }
+            Action::ToggleCamera(c) => {
+                let open = app.state.printer_cameras.remove(&c).is_none();
+                if open {
+                    app.state
+                        .printer_cameras
+                        .insert(c.clone(), CameraState::WaitingForUrl);
+                }
+                app.remote_print.enable_video(&c, open)
+            }
+            Action::RetryCamera(c) => {
+                app.state
+                    .printer_cameras
+                    .insert(c.clone(), CameraState::WaitingForUrl);
+                app.remote_print.enable_video(&c, true)
+            }
             Action::UploadFile { mainboard_id } => {
                 upload_file(app, mainboard_id);
                 Ok(())
@@ -321,9 +365,13 @@ pub fn ui(app: &mut App, ui: &mut Ui, ctx: &Context) {
 
     ui.add_space(8.0);
     if app.remote_print.is_initialized() {
-        ui.button(concatcp!(STOP, " Disable Remote Print"))
+        if ui
+            .button(concatcp!(STOP, " Disable Remote Print"))
             .clicked()
-            .then(|| app.remote_print.shutdown());
+        {
+            app.state.printer_cameras.clear();
+            app.remote_print.shutdown();
+        }
         ui.add_space(8.0);
     }
 
@@ -439,6 +487,61 @@ pub fn ui(app: &mut App, ui: &mut Ui, ctx: &Context) {
     });
 }
 
+/// Draws a printer's camera feed. Returns true if the user asked to retry.
+fn camera_ui(camera: &mut CameraState, client: &Client, ui: &mut Ui, ctx: &Context) -> bool {
+    if let (CameraState::WaitingForUrl, Some(url)) = (&camera, &client.video_url) {
+        *camera = match url.clone().and_then(|url| PrinterCamera::start(&url)) {
+            Ok(stream) => CameraState::Streaming(stream),
+            Err(e) => CameraState::Failed(e),
+        };
+    }
+
+    if let CameraState::Streaming(stream) = camera
+        && let Some(error) = stream.error()
+    {
+        let error = match stream.has_frame() {
+            true => error,
+            false => format!("Could not open camera stream {}.", stream.url),
+        };
+        *camera = CameraState::Failed(error);
+    }
+
+    ui.add_space(8.0);
+    match camera {
+        CameraState::WaitingForUrl => {
+            ui.horizontal(|ui| {
+                ui.add(Spinner::new());
+                ui.label("Waiting for the printer to start its camera…");
+            });
+        }
+        CameraState::Streaming(stream) => {
+            let width = ui.available_width();
+            let size = vec2(width, width / stream.aspect());
+            match stream.texture(ctx) {
+                Some(texture) => {
+                    ui.add(Image::from_texture(SizedTexture::new(texture.id(), size)));
+                }
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.add(Spinner::new());
+                        ui.label("Connecting to camera…");
+                    });
+                }
+            }
+        }
+        CameraState::Failed(error) => {
+            let mut retry = false;
+            ui.horizontal(|ui| {
+                ui.label(error.as_str());
+                retry = ui.button(concatcp!(ARROW_CLOCKWISE, " Retry")).clicked();
+            });
+            return retry;
+        }
+    }
+
+    false
+}
+
 fn upload_file(app: &mut App, mainboard_id: String) {
     if let Some(file) = FileDialog::new()
         .add_filter("Sliced Model", &["goo", "ctb"])
@@ -463,7 +566,7 @@ fn upload_file(app: &mut App, mainboard_id: String) {
         let file_name = file.file_name().unwrap().to_string_lossy();
         let file_name = file_name.rsplit_once('.').map(|x| x.0).unwrap_or_default();
         app.remote_print
-            .upload(&mainboard_id, data, file_name.to_owned(), format)
+            .upload(&mainboard_id, data, file_name.to_owned(), format, false)
             .unwrap();
     }
 }

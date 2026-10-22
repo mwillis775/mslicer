@@ -4,7 +4,8 @@
 //! checks the result for islands (regions that would print in mid-air). Any
 //! remaining islands are places the supports failed to hold up.
 //!
-//! Usage: supports [--style <standard|tree|lattice|mini|needle>] <model.stl> [output.stl]
+//! Usage: supports [--style <standard|tree|lattice|mini|needle>] [--orient] [--gap-fill]
+//! <model.stl> [output.stl]
 
 use std::{
     env,
@@ -33,6 +34,7 @@ use tools::supports::{
     collider::Collider,
     generate::generate,
     mesh::SupportMesh,
+    orient::orient,
     settings::{SupportSettings, SupportStyle},
 };
 
@@ -42,11 +44,19 @@ const CHECK_PIXEL: f32 = 0.05;
 fn main() -> Result<()> {
     let mut args = env::args().skip(1).peekable();
     let mut style = SupportStyle::Standard;
-    if args.next_if(|x| x == "--style").is_some() {
-        let name = args.next().context("No style supplied")?;
-        style = (SupportStyle::ALL.into_iter())
-            .find(|x| format!("{x:?}").eq_ignore_ascii_case(&name))
-            .context("Unknown style")?;
+    let (mut auto_orient, mut gap_fill) = (false, false);
+    while let Some(flag) = args.next_if(|x| x.starts_with("--")) {
+        match flag.as_str() {
+            "--style" => {
+                let name = args.next().context("No style supplied")?;
+                style = (SupportStyle::ALL.into_iter())
+                    .find(|x| format!("{x:?}").eq_ignore_ascii_case(&name))
+                    .context("Unknown style")?;
+            }
+            "--orient" => auto_orient = true,
+            "--gap-fill" => gap_fill = true,
+            _ => anyhow::bail!("Unknown flag {flag}"),
+        }
     }
     let path = args.next().context("No input path supplied")?;
     let output = args.next();
@@ -60,8 +70,33 @@ fn main() -> Result<()> {
     if let Ok(lift) = env::var("LIFT") {
         settings.placement.lift = lift.parse()?;
     }
-    println!("Style: {}", style.name());
-    mesh.set_position(Vector3::z() * settings.placement.lift);
+    settings.gap_fill.enabled = gap_fill;
+    println!("Style: {}, gap fill: {gap_fill}", style.name());
+
+    let start = Instant::now();
+    let bvh = Bvh::build(mesh.inner(), Progress::new());
+    let bvh_time = start.elapsed();
+
+    if auto_orient {
+        let start = Instant::now();
+        let orientation = orient(
+            &mesh,
+            &bvh,
+            &settings,
+            Vector3::repeat(f32::MAX),
+            Progress::new(),
+        );
+        mesh.set_rotation(orientation.rotation);
+        println!(
+            "Oriented to {:.1?}° (cost {:.1}) in {:?}",
+            orientation.rotation.map(f32::to_degrees),
+            orientation.cost,
+            start.elapsed()
+        );
+    }
+
+    let (min, _) = mesh.bounds();
+    mesh.set_position(mesh.position() + Vector3::z() * (settings.placement.lift - min.z));
     let (min, max) = mesh.bounds();
     println!(
         "Loaded {path}: {} faces, {:.1}×{:.1}×{:.1} mm",
@@ -71,10 +106,7 @@ fn main() -> Result<()> {
         max.z - min.z
     );
 
-    let start = Instant::now();
-    let bvh = Bvh::build(mesh.inner(), Progress::new());
     let collider = Collider::new(&mesh, &bvh);
-    let bvh_time = start.elapsed();
 
     let start = Instant::now();
     let generated = generate(&collider, &settings, 0.0, Progress::new());
@@ -92,6 +124,9 @@ fn main() -> Result<()> {
     let leaning = (generated.supports.iter())
         .filter(|x| x.route.path.len() > 1)
         .count();
+    let fills = (generated.supports.iter())
+        .filter(|x| x.style == SupportStyle::Fill)
+        .count();
     let on_model = (generated.supports.iter())
         .filter(|x| matches!(x.route.foot, tools::supports::Foot::Model(_)))
         .count();
@@ -100,7 +135,7 @@ fn main() -> Result<()> {
         .collect::<std::collections::HashSet<_>>()
         .len();
     println!(
-        "Generated {} supports ({leaning} leaning, {on_model} on model, {columns} columns), {} braces, {} failed",
+        "Generated {} supports ({leaning} leaning, {on_model} on model, {columns} columns, {fills} gap fill), {} braces, {} failed",
         generated.supports.len(),
         braces.len(),
         generated.failed.len()
@@ -117,7 +152,7 @@ fn main() -> Result<()> {
         start.elapsed(),
         candidates.len()
     );
-    for (point, err) in generated.failed.iter().take(0) {
+    for (point, err) in generated.failed.iter().take(10) {
         println!(
             "  failed: ({:.2}, {:.2}, {:.2}) {err:?}",
             point.x, point.y, point.z
@@ -156,6 +191,13 @@ fn main() -> Result<()> {
         save_combined(&output, &[&mesh, &support_mesh])?;
         save_combined(&format!("{output}.model.stl"), &[&mesh])?;
         save_combined(&format!("{output}.supports.stl"), &[&support_mesh])?;
+        let fills = (generated.supports.iter())
+            .filter(|x| x.style == SupportStyle::Fill)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some((fill_mesh, _)) = SupportMesh::build(&settings, 0.0, &fills, &[]) {
+            save_combined(&format!("{output}.fills.stl"), &[&fill_mesh])?;
+        }
         println!("Wrote {output}");
     }
 

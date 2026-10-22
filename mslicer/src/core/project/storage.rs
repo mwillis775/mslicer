@@ -25,6 +25,12 @@ use tools::supports::{Support, settings::SupportSettings};
 /// changes, even in development so anyone using the dev/prerelease versions
 /// don't ruin their projects.
 ///
+/// ## v19 (v0.10.0)
+/// Gap fills store the shape of the whole gap.
+///
+/// ## v18 (v0.10.0)
+/// Gap fill settings and gap fill columns.
+///
 /// ## v17 (v0.10.0)
 /// Support styles (tree, lattice, needles), tree settings and per-point
 /// support radii.
@@ -79,7 +85,7 @@ use tools::supports::{Support, settings::SupportSettings};
 /// ## v2 (v0.5.0)
 /// A complete rewrite using a custom serilizer/deserilizer because of the
 /// bincode drama...
-const VERSION: u16 = 17;
+const VERSION: u16 = 19;
 
 struct ModelInfo {
     mesh: u32,
@@ -267,7 +273,12 @@ impl Project {
         let support_settings = if version < 16 {
             SupportSettings::default()
         } else {
-            let format = if version < 17 { 1 } else { 2 };
+            let format = match version {
+                ..17 => 1,
+                17 => 2,
+                18 => 3,
+                _ => 4,
+            };
             let settings = SupportSettings::deserialize(des, format);
             for model in models.iter_mut() {
                 let supports = (0..des.read_u32_be())

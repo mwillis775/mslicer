@@ -1,11 +1,13 @@
 use common::{
     container::Run,
     slice::{EncodableLayer, ExposureConfig, SliceConfig},
-    units::Milimeters,
+    units::{Milimeters, MilimetersPerMinute},
 };
 use nalgebra::Vector2;
 
-use crate::{Layer, layer::calculate_checksum};
+use crate::{
+    FIRMWARE_MOTION_PLACEHOLDER, Layer, firmware_controls_motion, layer::calculate_checksum,
+};
 
 /// Encodes a series of runs into the internal layer format.
 pub struct LayerEncoder {
@@ -129,7 +131,7 @@ impl EncodableLayer for LayerEncoder {
         exposure: &ExposureConfig,
         height: Milimeters,
     ) -> Self::Output {
-        Layer {
+        let mut layer = Layer {
             checksum: self.checksum(),
             data: self.data,
             layer_position_z: height,
@@ -143,7 +145,19 @@ impl EncodableLayer for LayerEncoder {
             retract_speed: exposure.retract_speed.convert(),
             pause_position_z: slice_config.platform_size.z,
             ..Default::default()
+        };
+
+        if firmware_controls_motion(slice_config) {
+            let distance = Milimeters::new(FIRMWARE_MOTION_PLACEHOLDER);
+            let speed = MilimetersPerMinute::new(FIRMWARE_MOTION_PLACEHOLDER);
+            layer.lift_distance = distance;
+            layer.lift_speed = speed;
+            layer.retract_distance = distance;
+            layer.retract_speed = speed;
+            layer.pause_position_z = height;
         }
+
+        layer
     }
 }
 

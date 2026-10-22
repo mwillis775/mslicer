@@ -49,7 +49,7 @@ pub fn brace(
     let bottom = settings.column_bottom(plate_z) + END_MARGIN;
     let mut seen = HashSet::new();
     let columns = (supports.iter())
-        .filter(|x| x.route.foot == Foot::Plate)
+        .filter(|x| x.route.foot == Foot::Plate && x.style != SupportStyle::Fill)
         .filter(|x| seen.insert(x.column_top().map(f32::to_bits)))
         .map(|x| Column {
             position: x.column_top().xy(),

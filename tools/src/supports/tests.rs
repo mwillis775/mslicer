@@ -16,8 +16,9 @@ use crate::supports::{
     bracing::brace,
     collider::Collider,
     generate::{generate, new_support, reroute, reroute_all},
-    islands::find_islands,
+    islands::{find_islands, find_islands_in},
     mesh::SupportMesh,
+    orient::{Shape, detailed_cost, orient, rotation_for_up},
     routing::Router,
     settings::{FORMAT_VERSION, SupportSettings, SupportStyle},
 };
@@ -171,6 +172,7 @@ fn support_mesh_is_closed() {
                     path: vec![Vector3::new(0.0, 0.0, 8.0), Vector3::new(2.0, 0.0, 6.0)],
                     radii: vec![size.shaft_radius(), size.shaft_radius() * 1.5],
                     foot: Foot::Plate,
+                    fill: None,
                 },
             ),
             Support::new(
@@ -596,6 +598,8 @@ fn settings_and_supports_roundtrip() {
     let collider = Collider::new(&mesh, &bvh);
     let mut settings = SupportSettings::for_style(SupportStyle::Tree);
     settings.tree.branch_angle = 33.0;
+    settings.gap_fill.enabled = true;
+    settings.gap_fill.max_height = 7.0;
     let generated = generate(&collider, &settings, 0.0, Progress::new());
 
     let mut ser = DynamicSerializer::new();
@@ -616,4 +620,200 @@ fn settings_and_supports_roundtrip() {
         assert_eq!(loaded.style, support.style);
         assert_eq!(loaded.route, support.route);
     }
+}
+
+/// Two floating slabs with a gap between them too narrow for any support.
+fn sandwich() -> (Mesh, Bvh) {
+    let mut builder = MeshBuilder::new();
+    add_box(
+        &mut builder,
+        Vector3::new(-6.0, -6.0, 8.0),
+        Vector3::new(6.0, 6.0, 11.0),
+    );
+    add_box(
+        &mut builder,
+        Vector3::new(-6.0, -6.0, 11.6),
+        Vector3::new(6.0, 6.0, 15.0),
+    );
+    with_bvh(builder.build())
+}
+
+/// Islands left in the model with its supports in place.
+fn leftover_area(
+    mesh: &Mesh,
+    collider: &Collider,
+    settings: &SupportSettings,
+    supports: &[Support],
+) -> f32 {
+    let mut builder = MeshBuilder::new();
+    let (vertices, faces) = builder.raw_mut();
+    vertices.extend_from_slice(mesh.vertices());
+    faces.extend_from_slice(mesh.faces());
+    let (support_mesh, _) = SupportMesh::build(settings, 0.0, supports, &[]).unwrap();
+    let offset = vertices.len() as u32;
+    vertices.extend_from_slice(support_mesh.vertices());
+    faces.extend(support_mesh.faces().iter().map(|f| f.map(|x| x + offset)));
+    let combined = builder.build();
+    [0.0, 0.5]
+        .into_iter()
+        .flat_map(|phase| {
+            find_islands_in(collider, &combined, 0.0, settings.placement.spacing, phase)
+        })
+        .map(|x| x.area)
+        .sum()
+}
+
+#[test]
+fn gap_fill_fills_narrow_gaps() {
+    let (mesh, bvh) = sandwich();
+    let collider = Collider::new(&mesh, &bvh);
+
+    let mut settings = SupportSettings::default();
+    let without = generate(&collider, &settings, 0.0, Progress::new());
+    assert!(!without.failed.is_empty(), "the gap can't be supported");
+    assert!(
+        without
+            .supports
+            .iter()
+            .all(|x| x.style != SupportStyle::Fill)
+    );
+
+    settings.gap_fill.enabled = true;
+    let with = generate(&collider, &settings, 0.0, Progress::new());
+    let fills = (with.supports.iter())
+        .filter(|x| x.style == SupportStyle::Fill)
+        .collect::<Vec<_>>();
+    assert!(with.failed.is_empty(), "{:?}", with.failed);
+
+    // The whole gap is one fill, covering all of it, sunk into both slabs.
+    assert_eq!(fills.len(), 1);
+    let shape = fills[0].route.fill.as_ref().unwrap();
+    assert!(shape.area() > 12.0 * 12.0 * 0.95, "area {}", shape.area());
+    for cell in shape.cells.iter() {
+        assert!(cell.top > 11.6 && cell.top < 11.9, "top {}", cell.top);
+        assert!(
+            cell.bottom < 11.0 && cell.bottom > 10.7,
+            "bottom {}",
+            cell.bottom
+        );
+    }
+
+    // No supports are left inside the gap, and nothing is left hanging.
+    assert!(
+        (with.supports.iter())
+            .filter(|x| x.style != SupportStyle::Fill)
+            .all(|x| x.contact.point.z < 9.0)
+    );
+    assert_eq!(
+        leftover_area(&mesh, &collider, &settings, &with.supports),
+        0.0
+    );
+
+    // It re-routes to the same shape, and builds a closed mesh that doesn't
+    // stick out past the slabs.
+    let router = Router::new(&collider, &settings, 0.0);
+    let rerouted = reroute(&collider, &router, fills[0]).unwrap();
+    assert_eq!(rerouted.route, fills[0].route);
+
+    let fills = fills.into_iter().cloned().collect::<Vec<_>>();
+    let (fill_mesh, _) = SupportMesh::build(&settings, 0.0, &fills, &[]).unwrap();
+    let (open, volume) = closed_volume(&fill_mesh);
+    assert_eq!(open, 0);
+    assert!(volume > 12.0 * 12.0 * 0.6 * 0.9, "volume {volume}");
+    let (min, max) = fill_mesh.bounds();
+    assert!(
+        min.xy().min() > -6.2 && max.xy().max() < 6.2,
+        "{min:?} {max:?}"
+    );
+
+    // Gaps taller than the limit are left alone.
+    settings.gap_fill.max_height = 0.3;
+    let limited = generate(&collider, &settings, 0.0, Progress::new());
+    assert!(
+        limited
+            .supports
+            .iter()
+            .all(|x| x.style != SupportStyle::Fill)
+    );
+    assert!(!limited.failed.is_empty());
+}
+
+#[test]
+fn fill_roundtrip() {
+    use common::serde::{DynamicSerializer, SliceDeserializer};
+
+    let (mesh, bvh) = sandwich();
+    let collider = Collider::new(&mesh, &bvh);
+    let mut settings = SupportSettings::default();
+    settings.gap_fill.enabled = true;
+    let generated = generate(&collider, &settings, 0.0, Progress::new());
+    let fill = (generated.supports.iter())
+        .find(|x| x.style == SupportStyle::Fill)
+        .unwrap();
+
+    let mut ser = DynamicSerializer::new();
+    fill.serialize(&mut ser);
+    let bytes = ser.into_inner();
+    let loaded = Support::deserialize(&mut SliceDeserializer::new(&bytes), FORMAT_VERSION);
+    assert_eq!(loaded.route, fill.route);
+    assert!(!loaded.is_stale());
+}
+
+#[test]
+fn rotation_for_up_points_up() {
+    for i in 0..50 {
+        let t = i as f32 * 0.37;
+        let up = Vector3::new(t.sin(), (t * 1.7).cos(), (t * 0.3).sin() - 0.5).normalize();
+        for yaw in [0.0, 1.1, -2.5] {
+            let r = rotation_for_up(up, yaw);
+            assert!((r.z - yaw).abs() < 1e-6);
+            let rotated = nalgebra::Rotation3::from_euler_angles(r.x, r.y, r.z) * up;
+            assert!(
+                (rotated - Vector3::z()).magnitude() < 1e-4,
+                "{up:?} -> {rotated:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn orients_flat_plate_on_its_side() {
+    let mut builder = MeshBuilder::new();
+    add_box(
+        &mut builder,
+        Vector3::new(-15.0, -15.0, -1.0),
+        Vector3::new(15.0, 15.0, 1.0),
+    );
+    let (mut mesh, bvh) = with_bvh(builder.build());
+    mesh.set_rotation(Vector3::new(0.0, 0.0, 0.4));
+
+    let settings = SupportSettings::default();
+    let shape = Shape::new(&mesh);
+    let platform = Vector3::new(200.0, 200.0, 200.0);
+    let flat = detailed_cost(&mesh, &bvh, &settings, platform, &shape, mesh.rotation());
+    let best = orient(&mesh, &bvh, &settings, platform, Progress::new());
+    assert!(best.cost < flat * 0.5, "{} vs flat {}", best.cost, flat);
+    assert!((best.rotation.z - 0.4).abs() < 1e-6, "yaw is kept");
+
+    // The plate's face normal shouldn't end up pointing up or down.
+    let rotation =
+        nalgebra::Rotation3::from_euler_angles(best.rotation.x, best.rotation.y, best.rotation.z);
+    let normal = rotation * Vector3::z();
+    assert!(normal.z.abs() < 0.9, "still lying flat: {normal:?}");
+
+    // Already good orientations are kept.
+    mesh.set_rotation(best.rotation);
+    let again = orient(&mesh, &bvh, &settings, platform, Progress::new());
+    assert!(again.cost <= best.cost * 1.01);
+
+    // On a build volume too short to stand it up, it stays flat.
+    mesh.set_rotation(Vector3::new(0.0, 0.0, 0.4));
+    let short = Vector3::new(200.0, 200.0, 12.0);
+    let best = orient(&mesh, &bvh, &settings, short, Progress::new());
+    let (min, max) = {
+        let mut mesh = mesh.clone();
+        mesh.set_rotation(best.rotation);
+        mesh.bounds()
+    };
+    assert!(max.z - min.z + settings.placement.lift <= 12.0);
 }

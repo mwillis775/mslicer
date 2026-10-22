@@ -45,6 +45,9 @@ pub struct Client {
     pub attributes: Option<Attributes>,
     pub status: Option<Status>,
     pub transfer_info: FileTransferInfo,
+    /// Camera stream URL, or why it couldn't be started.
+    pub video_url: Option<Result<String, String>>,
+    video_requested: bool,
 
     pub ip: Ipv4Addr,
     pub last_update: i64,
@@ -166,6 +169,17 @@ impl RemotePrintV3 {
                                 serde_json::from_str::<ResponseMessage>(text)
                             {
                                 let (cmd, ack) = (response.data.cmd, response.data.data.ack);
+                                if cmd == Cmd::EnableVideo(true).cmd()
+                                    && let Some(client) = clients.lock().get_mut(&mainboard_id)
+                                    && client.video_requested
+                                {
+                                    client.video_url = Some(video_url(
+                                        client.ip,
+                                        ack,
+                                        response.data.data.video_url,
+                                    ));
+                                }
+
                                 if ack != 0 {
                                     warn!(
                                         "Printer `{mainboard_id}` rejected command {cmd} with {ack}"
@@ -218,7 +232,13 @@ impl RemotePrintV3 {
         Ok(())
     }
 
-    pub fn upload(&self, mainboard: &str, data: Arc<Vec<u8>>, filename: String) -> Result<()> {
+    pub fn upload(
+        &self,
+        mainboard: &str,
+        data: Arc<Vec<u8>>,
+        filename: String,
+        print_after: bool,
+    ) -> Result<()> {
         let mut clients = self.clients.lock();
         let client = clients.get_mut(mainboard).unwrap();
         client.transfer_info = FileTransferInfo {
@@ -231,19 +251,36 @@ impl RemotePrintV3 {
         let ip = client.ip;
         drop(clients);
 
-        let result = self.upload_chunks(mainboard, ip, &data, &filename);
+        // Uploads take a while (~1 minute for a 16K file over Wi-Fi), so don't
+        // block the caller; progress is reported through `transfer_info`.
+        let clients = self.clients.clone();
+        let mainboard = mainboard.to_owned();
+        thread::spawn(move || {
+            let result = Self::upload_chunks(&clients, &mainboard, ip, &data, &filename);
+            if let Err(e) = &result {
+                warn!("Upload of `{filename}` to `{mainboard}` failed: {e:?}");
+            }
 
-        let mut clients = self.clients.lock();
-        if let Some(client) = clients.get_mut(mainboard) {
-            client.transfer_info.status =
-                [FileTransferStatus::Error, FileTransferStatus::Done][result.is_ok() as usize];
-        }
+            if let Some(client) = clients.lock().get_mut(&mainboard) {
+                client.transfer_info.status =
+                    [FileTransferStatus::Error, FileTransferStatus::Done][result.is_ok() as usize];
 
-        result
+                if result.is_ok() && print_after {
+                    info!("Starting print of `{filename}` on `{mainboard}`");
+                    let cmd = Cmd::StartPrinting {
+                        filename,
+                        start_layer: 0,
+                    };
+                    let _ = client.sender.send(cmd);
+                }
+            }
+        });
+
+        Ok(())
     }
 
     fn upload_chunks(
-        &self,
+        clients: &Mutex<HashMap<String, Client>>,
         mainboard: &str,
         ip: Ipv4Addr,
         data: &[u8],
@@ -283,7 +320,7 @@ impl RemotePrintV3 {
             }
 
             offset = end;
-            if let Some(client) = self.clients.lock().get_mut(mainboard) {
+            if let Some(client) = clients.lock().get_mut(mainboard) {
                 client.transfer_info.download_offset = offset as u32;
                 client.transfer_info.check_offset = offset as u32;
             }
@@ -312,6 +349,15 @@ impl RemotePrintV3 {
         self.send_cmd(mainboard, Cmd::StopPrinting)
     }
 
+    /// The URL of the camera stream arrives asynchronously in [`Client::video_url`].
+    pub fn enable_video(&self, mainboard: &str, enable: bool) -> Result<()> {
+        if let Some(client) = self.clients.lock().get_mut(mainboard) {
+            client.video_url = None;
+            client.video_requested = enable;
+        }
+        self.send_cmd(mainboard, Cmd::EnableVideo(enable))
+    }
+
     fn send_cmd(&self, mainboard: &str, cmd: Cmd) -> Result<()> {
         let clients = self.clients();
         let client = clients
@@ -319,6 +365,21 @@ impl RemotePrintV3 {
             .with_context(|| format!("Printer `{mainboard}` is not connected."))?;
         client.sender.send(cmd).unwrap();
         Ok(())
+    }
+}
+
+fn video_url(ip: Ipv4Addr, ack: u8, url: Option<String>) -> Result<String, String> {
+    match (ack, url) {
+        (0, Some(url)) if url.contains("://") => Ok(url),
+        (0, Some(url)) => Ok(format!("http://{url}")),
+        // All stream slots are taken (they are only released after a while
+        // when a client goes away without disabling its stream). Elegoo resin
+        // printers always serve the stream at the same address, so try it.
+        (0 | 1, _) => Ok(format!("rtsp://{ip}:554/video")),
+        (2, _) => Err("This printer does not have a camera.".into()),
+        _ => Err(format!(
+            "The printer failed to start its camera (error {ack})."
+        )),
     }
 }
 
@@ -334,6 +395,8 @@ impl Client {
                 file_total_size: 0,
                 filename: "".into(),
             },
+            video_url: None,
+            video_requested: false,
 
             ip,
             last_update: 0,

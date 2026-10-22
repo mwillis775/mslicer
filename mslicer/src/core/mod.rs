@@ -31,6 +31,7 @@ use crate::{
 
 pub mod config;
 pub mod history;
+pub mod printer_camera;
 pub mod project;
 pub mod selected;
 pub mod slice;

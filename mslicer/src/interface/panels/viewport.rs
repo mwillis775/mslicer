@@ -1,6 +1,9 @@
 use egui::{
-    Align2, Area, Button, Color32, Context, Frame, Id, Key, Order, Painter, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, Theme, Ui, Vec2, Widget, pos2, vec2,
+    Align2, Area, Button, Checkbox, Color32, Context, Frame, Id, Key, Order, Painter, Pos2, Rect,
+    RichText, Sense, Stroke, StrokeKind, Theme, Ui, Vec2, Widget, pos2, vec2,
+};
+use egui_phosphor::regular::{
+    ARROW_LINE_DOWN, COPY, EYE_SLASH, FILE_PLUS, SELECTION_ALL, SQUARES_FOUR, TRASH,
 };
 use egui_wgpu::Callback;
 use nalgebra::{Matrix4, Rotation3, Vector3};
@@ -9,11 +12,15 @@ use crate::{
     core::{
         App,
         config::ui::HoverOverlay,
+        history::{Action, ModelAction, Transform},
         state::{GeometryHit, Tool, WorkspaceHover},
     },
     interface::{
         components::grid,
+        cut,
+        gizmo::{self, View},
         panels::supports::{delete_selected, manual_support_placement},
+        shortcuts::{IMPORT_MODEL_SHORTCUT, LAYOUT_SHORTCUT, SELECT_ALL_SHORTCUT, Shortcut},
         theme::Palette,
     },
     render::{interface::basis::BasisRenderCallback, workspace::WorkspaceRenderCallback},
@@ -24,7 +31,10 @@ const NUMBER_KEYS: [Key; 10] = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key:
 
 pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-    app.camera.handle_movement(&response, ui);
+    let view = View::new(app, rect);
+    let captured =
+        gizmo::interact(app, ui, &response, &view) | cut::interact(app, ui, &response, &view);
+    app.camera.handle_movement(&response, ui, !captured);
 
     let focused = ui.input(|i| i.focused);
     let mut is_moving = app.spacenav().handle_movement(focused);
@@ -54,9 +64,10 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     {
         delete_selected(app);
     }
-    if response.clicked() && !is_moving {
+    let handle_hovered = gizmo::is_hovered(app) || cut::is_hovered(app);
+    if response.clicked() && !is_moving && !handle_hovered {
         match app.state.tool {
-            Tool::Select => {
+            tool if tool.selects_models() => {
                 if let Some(hover) = app.state.hovered_geometry {
                     let shift = ui.input(|x| x.modifiers.shift);
                     if hover.support {
@@ -87,14 +98,33 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                         Vector3::zeros()
                     };
 
+                    let old = Transform::of(model);
                     let center = model.get_bounds_center();
                     model.set_rotation(&platform, rotation);
                     model.set_bounds_center(&platform, center);
                     model.align_to_bed();
+                    let action = ModelAction::Transform(old);
+                    app.history.track(Action::Model {
+                        id: hover.model,
+                        action,
+                    });
                 }
             }
+            _ => {}
         }
     }
+
+    if response.secondary_clicked() {
+        app.state.context_model = (app.state.hovered_geometry)
+            .filter(|x| !x.support)
+            .map(|x| x.model);
+        if let Some(id) = app.state.context_model
+            && !app.state.selected.contains_model(id)
+        {
+            app.state.selected.model_clicked(id, false);
+        }
+    }
+    response.context_menu(|ui| context_menu(app, ui));
 
     let painter = ui.painter();
     let color = match app.config.ui.theme {
@@ -107,6 +137,8 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
         rect,
         app.get_workspace_render_callback(),
     ));
+    gizmo::paint(app, painter, &view);
+    cut::paint(app, painter, &view);
 
     Area::new(Id::new("toolbar"))
         .anchor(Align2::LEFT_TOP, Vec2::splat(10.0))
@@ -117,18 +149,32 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
                 .corner_radius(ui.visuals().menu_corner_radius)
                 .fill(Color32::BLACK.lerp_to_gamma(Color32::TRANSPARENT, 0.25))
                 .show(ui, |ui| {
+                    let typing = ui.ctx().wants_keyboard_input();
                     for (i, tool) in Tool::ALL.into_iter().enumerate() {
+                        let letter = tool.letter().map(|x| format!(" or {}", x.name()));
                         let button = Button::new(RichText::new(tool.icon()).size(20.0))
                             .selected(tool == app.state.tool)
                             .min_size(Vec2::splat(30.0))
                             .ui(ui)
-                            .on_hover_text(format!("{}\nShortcut: {}", tool.name(), i + 1));
+                            .on_hover_text(format!(
+                                "{}\nShortcut: {}{}",
+                                tool.name(),
+                                i + 1,
+                                letter.unwrap_or_default()
+                            ));
 
-                        let shortcut = ui.input(|x| x.key_pressed(NUMBER_KEYS[i + 1]));
+                        let shortcut = !typing
+                            && ui.input(|x| {
+                                x.modifiers.is_none()
+                                    && (x.key_pressed(NUMBER_KEYS[i + 1])
+                                        || tool.letter().is_some_and(|k| x.key_pressed(k)))
+                            });
                         (button.clicked() || shortcut).then(|| app.state.tool = tool);
                     }
                 })
         });
+
+    tool_options(app, ui.ctx(), rect);
 
     paint_basis_vectors(painter, app, &rect);
 
@@ -138,6 +184,150 @@ pub fn ui(app: &mut App, ui: &mut Ui, _ctx: &Context) {
     {
         paint_hover_overlay(ui, app, hover, px);
     }
+}
+
+fn context_menu(app: &mut App, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let model = app.state.context_model.and_then(|id| {
+        let model = app.project.models.iter().find(|x| x.id == id)?;
+        Some((id, model.name.clone()))
+    });
+
+    if let Some((id, name)) = model {
+        ui.label(RichText::new(name).strong());
+        ui.horizontal(|ui| {
+            for tool in [Tool::Move, Tool::Rotate, Tool::Scale, Tool::Cut] {
+                let button = Button::new(RichText::new(tool.icon()).size(16.0))
+                    .selected(app.state.tool == tool)
+                    .ui(ui)
+                    .on_hover_text(tool.name());
+                if button.clicked() {
+                    app.state.selected.model_clicked(id, false);
+                    app.state.tool = tool;
+                    ui.close();
+                }
+            }
+        });
+
+        let platform = app.project.slice_config.platform_size;
+        if ui
+            .button(format!("{ARROW_LINE_DOWN} Drop to Bed"))
+            .clicked()
+        {
+            let model = app.project.model(id).unwrap();
+            let old = model.mesh.position();
+            model.align_to_bed();
+            model.update_oob(&platform);
+            app.history.track_model(id, ModelAction::Position(old));
+            ui.close();
+        }
+
+        if ui.button(format!("{COPY} Duplicate")).clicked() {
+            let model = app.project.model(id).unwrap();
+            let mut copy = model.clone();
+            // Set the copy down beside the original rather than inside it.
+            let (min, max) = model.mesh.bounds();
+            let offset = Vector3::x() * (max.x - min.x + 5.0);
+            copy.set_position(&platform, copy.mesh.position() + offset);
+            app.history.track(Action::ModelAdded { id: copy.id });
+            app.state.selected.model_clicked(copy.id, false);
+            app.project.models.push(copy);
+            ui.close();
+        }
+
+        if ui.button(format!("{EYE_SLASH} Hide")).clicked() {
+            let model = app.project.model(id).unwrap();
+            app.history
+                .track_model(id, ModelAction::Hidden(model.hidden));
+            model.hidden = true;
+            ui.close();
+        }
+
+        if ui.button(format!("{TRASH} Delete")).clicked()
+            && let Some(index) = app.project.models.iter().position(|x| x.id == id)
+        {
+            let model = Box::new(app.project.models.remove(index));
+            app.history.track(Action::ModelRemoved { index, model });
+            app.state.selected.clear();
+            ui.close();
+        }
+
+        ui.separator();
+    }
+
+    let mut item = |ui: &mut Ui, text: String, shortcut: &Shortcut| {
+        let button = Button::new(text).shortcut_text(ctx.format_shortcut(shortcut));
+        if ui.add(button).clicked() {
+            (shortcut.callback)(app, &ctx);
+            ui.close();
+        }
+    };
+
+    item(
+        ui,
+        format!("{FILE_PLUS} Add Model…"),
+        &IMPORT_MODEL_SHORTCUT,
+    );
+    item(ui, format!("{SQUARES_FOUR} Arrange All"), &LAYOUT_SHORTCUT);
+    item(
+        ui,
+        format!("{SELECTION_ALL} Select All"),
+        &SELECT_ALL_SHORTCUT,
+    );
+}
+
+/// Options and help for the active manipulation tool, along the top of the
+/// viewport.
+fn tool_options(app: &mut App, ctx: &Context, rect: Rect) {
+    let tool = app.state.tool;
+    if !matches!(tool, Tool::Move | Tool::Rotate | Tool::Scale | Tool::Cut) {
+        return;
+    }
+
+    Area::new(Id::new("tool_options"))
+        .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 10.0))
+        .constrain_to(rect)
+        .show(ctx, |ui| {
+            Frame::new()
+                .inner_margin(Vec2::splat(8.0))
+                .corner_radius(ui.visuals().menu_corner_radius)
+                .fill(Color32::BLACK.lerp_to_gamma(Color32::TRANSPARENT, 0.25))
+                .show(ui, |ui| {
+                    ui.set_max_width(360.0);
+                    ui.label(RichText::new(format!("{} {}", tool.icon(), tool.name())).strong());
+
+                    let selected = gizmo::selected_models(app);
+                    match tool {
+                        Tool::Cut => cut::options(app, ui),
+                        _ if selected.is_empty() => {
+                            ui.label("Click a model to select it.");
+                        }
+                        Tool::Scale => {
+                            let models = (app.project.models.iter_mut())
+                                .filter(|x| selected.contains(&x.id));
+                            let mut uniform = true;
+                            let models = models.collect::<Vec<_>>();
+                            models.iter().for_each(|x| uniform &= x.ui.locked_scale);
+                            if Checkbox::new(&mut uniform, "Uniform scale")
+                                .ui(ui)
+                                .changed()
+                            {
+                                models.into_iter().for_each(|x| x.ui.locked_scale = uniform);
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    let hint = if tool == Tool::Cut {
+                        Some(cut::hint())
+                    } else {
+                        gizmo::hint(tool)
+                    };
+                    if let Some(hint) = hint {
+                        ui.label(RichText::new(hint).small().weak());
+                    }
+                });
+        });
 }
 
 fn paint_basis_vectors(painter: &Painter, app: &mut App, rect: &Rect) {

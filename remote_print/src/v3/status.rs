@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use serde_repr::Deserialize_repr;
 
 use crate::shared::{PrintInfo, Response};
 
@@ -73,6 +72,16 @@ pub struct Attributes {
     pub mainboard_id: String,
 }
 
+impl Attributes {
+    pub fn has_camera(&self) -> bool {
+        self.capabilities.iter().any(|x| x == "VIDEO_STREAM")
+    }
+
+    pub fn supports_goo(&self) -> bool {
+        (self.support_file_type.iter()).any(|x| x.eq_ignore_ascii_case("goo"))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Status {
@@ -80,14 +89,31 @@ pub struct Status {
     pub print_info: PrintInfo,
 }
 
-#[repr(u8)]
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize_repr, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum CurrentStatus {
-    Idle = 0,
-    Printing = 1,
-    FileTransferring = 2,
-    ExposureTesting = 3,
-    DevicesTesting = 4,
+    Idle,
+    Printing,
+    FileTransferring,
+    ExposureTesting,
+    DevicesTesting,
+    /// The Saturn 4 Ultra briefly reports 8 at the end of a file transfer.
+    Unknown(u8),
+}
+
+impl<'de> Deserialize<'de> for CurrentStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match u8::deserialize(deserializer)? {
+            0 => Self::Idle,
+            1 => Self::Printing,
+            2 => Self::FileTransferring,
+            3 => Self::ExposureTesting,
+            4 => Self::DevicesTesting,
+            x => Self::Unknown(x),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -101,7 +127,7 @@ pub struct Command<T> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CommandData<T> {
-    pub cmd: u8,
+    pub cmd: u16,
     pub data: T,
     #[serde(rename = "RequestID")]
     pub request_id: String,
@@ -121,7 +147,7 @@ pub struct ResponseMessage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResponseData {
-    pub cmd: u8,
+    pub cmd: u16,
     pub data: AckData,
     #[serde(rename = "MainboardID")]
     pub mainboard_id: String,
@@ -132,6 +158,9 @@ pub struct ResponseData {
 pub struct AckData {
     #[serde(default)]
     pub ack: u8,
+    /// Only sent in response to the video stream command.
+    #[serde(rename = "VideoUrl")]
+    pub video_url: Option<String>,
 }
 
 /// Response to `sdcp/error/{MainboardID}`

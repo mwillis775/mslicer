@@ -15,6 +15,8 @@
 //!   base, optionally on a raft) or the model's own surface (ending with a
 //!   second, upside-down tip).
 
+use std::sync::Arc;
+
 use common::{
     id_type,
     serde::{Deserializer, SerdeExt, Serializer},
@@ -23,9 +25,11 @@ use nalgebra::Vector3;
 
 pub mod bracing;
 pub mod collider;
+pub mod fill;
 pub mod generate;
 pub mod islands;
 pub mod mesh;
+pub mod orient;
 pub mod placement;
 pub mod routing;
 pub mod settings;
@@ -34,6 +38,7 @@ pub mod tree;
 #[cfg(test)]
 mod tests;
 
+use fill::FillShape;
 use settings::{SupportSize, SupportStyle};
 
 id_type!(SupportId, u32);
@@ -70,6 +75,9 @@ pub struct Route {
     /// radius.
     pub radii: Vec<f32>,
     pub foot: Foot,
+    /// The shape of a gap fill, for [`SupportStyle::Fill`] supports only. A
+    /// fill's path is just its seed point.
+    pub fill: Option<Arc<FillShape>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,6 +133,12 @@ impl Support {
         (self.route.path.iter()).fold(f32::MAX, |min, p| min.min(p.z))
     }
 
+    /// Whether the support needs to be routed again before it can be used, as
+    /// it was loaded from an older format.
+    pub fn is_stale(&self) -> bool {
+        self.style == SupportStyle::Fill && self.route.fill.is_none()
+    }
+
     /// Copy of this support with a new id.
     pub fn duplicate(&self) -> Self {
         Self {
@@ -150,6 +164,9 @@ impl Support {
                 contact.serialize(ser);
             }
         }
+
+        ser.write_bool(self.route.fill.is_some());
+        (self.route.fill.iter()).for_each(|x| x.serialize(ser));
     }
 
     /// Reads a support written in the given [`settings::FORMAT_VERSION`].
@@ -176,7 +193,16 @@ impl Support {
             _ => Foot::Plate,
         };
 
-        let route = Route { path, radii, foot };
+        // Fills from format 3 were made of columns, they are left without a
+        // shape so they get grown again.
+        let fill = (format >= 4 && des.read_bool()).then(|| Arc::new(FillShape::deserialize(des)));
+
+        let route = Route {
+            path,
+            radii,
+            foot,
+            fill,
+        };
         Self::new(style, size, local, contact, route)
     }
 }
@@ -188,6 +214,7 @@ impl Route {
             path,
             radii: Vec::new(),
             foot,
+            fill: None,
         }
     }
 }

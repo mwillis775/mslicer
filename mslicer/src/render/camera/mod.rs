@@ -79,11 +79,13 @@ impl Camera {
         }
     }
 
-    pub fn handle_movement(&mut self, response: &Response, ui: &Ui) {
+    /// Orbits, pans, and zooms the camera. Orbiting is skipped when `orbit` is
+    /// false, so viewport tools can use primary button drags.
+    pub fn handle_movement(&mut self, response: &Response, ui: &Ui, orbit: bool) {
         let shift_down = ui.input(|x| x.modifiers.shift);
         let drag_delta = response.drag_delta() * if shift_down { 0.1 } else { 1.0 };
 
-        if response.dragged_by(PointerButton::Primary) {
+        if orbit && response.dragged_by(PointerButton::Primary) {
             self.angle.x -= drag_delta.x * 0.01;
             self.angle.y += drag_delta.y * 0.01;
         }

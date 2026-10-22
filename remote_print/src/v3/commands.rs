@@ -36,10 +36,11 @@ pub enum Cmd {
     PausePrinting,
     StopPrinting,
     ResumePrinting,
+    EnableVideo(bool),
 }
 
 impl Cmd {
-    pub fn cmd(&self) -> u8 {
+    pub fn cmd(&self) -> u16 {
         match self {
             Cmd::RefreshStatus => 0,
             Cmd::RefreshAttributes => 1,
@@ -47,6 +48,7 @@ impl Cmd {
             Cmd::PausePrinting => 129,
             Cmd::StopPrinting => 130,
             Cmd::ResumePrinting => 131,
+            Cmd::EnableVideo(_) => 386,
         }
     }
 
@@ -64,6 +66,7 @@ impl Cmd {
             Cmd::PausePrinting => json!({}),
             Cmd::StopPrinting => json!({}),
             Cmd::ResumePrinting => json!({}),
+            Cmd::EnableVideo(enable) => json!({ "Enable": *enable as u8 }),
         }
     }
 }

@@ -5,12 +5,15 @@ use common::{
     progress::Progress,
     serde::{DynamicSerializer, Serializer, SizedString, SliceDeserializer},
     slice::{self, ExposureConfig, ExposureRemap, Height, SliceConfig, SliceMode, SlicedFile},
-    units::Second,
+    units::{Milimeters, MilimetersPerMinute, Second},
 };
 use image::{RgbaImage, imageops::FilterType};
 use nalgebra::{Vector2, Vector3};
 
-use crate::{ENDING_STRING, Header, Layer, PreviewImage};
+use crate::{
+    ENDING_STRING, FIRMWARE_MOTION_PLACEHOLDER, Header, Layer, PreviewImage,
+    firmware_controls_motion,
+};
 
 /// A Goo file.
 pub struct File {
@@ -30,41 +33,57 @@ impl File {
         let save_time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
         let (first_layers, transition_layers) = config.layer_counts();
-        Self::new(
-            Header {
-                x_resolution: config.platform_resolution.x as u16,
-                y_resolution: config.platform_resolution.y as u16,
-                x_size: config.platform_size.x,
-                y_size: config.platform_size.y,
-                z_size: config.platform_size.z,
+        let mut header = Header {
+            x_resolution: config.platform_resolution.x as u16,
+            y_resolution: config.platform_resolution.y as u16,
+            x_size: config.platform_size.x,
+            y_size: config.platform_size.y,
+            z_size: config.platform_size.z,
 
-                layer_count,
-                printing_time: print_time.get::<Second>() as u32,
-                layer_thickness: config.slice_height,
-                bottom_layers: first_layers,
-                transition_layers: transition_layers as u16,
+            layer_count,
+            printing_time: print_time.get::<Second>() as u32,
+            layer_thickness: config.slice_height,
+            bottom_layers: first_layers,
+            transition_layers: transition_layers as u16,
 
-                exposure_time: config.exposure_config.exposure_time,
-                after_retract_time: config.exposure_config.exposure_delay,
-                light_pwm: config.exposure_config.pwm,
-                lift_distance: config.exposure_config.lift_distance,
-                lift_speed: config.exposure_config.lift_speed.convert(),
-                retract_distance: config.exposure_config.lift_distance,
-                retract_speed: config.exposure_config.retract_speed.convert(),
+            exposure_time: config.exposure_config.exposure_time,
+            after_retract_time: config.exposure_config.exposure_delay,
+            light_pwm: config.exposure_config.pwm,
+            lift_distance: config.exposure_config.lift_distance,
+            lift_speed: config.exposure_config.lift_speed.convert(),
+            retract_distance: config.exposure_config.lift_distance,
+            retract_speed: config.exposure_config.retract_speed.convert(),
 
-                bottom_exposure_time: config.first_exposure_config.exposure_time,
-                bottom_after_retract_time: config.first_exposure_config.exposure_delay,
-                bottom_light_pwm: config.first_exposure_config.pwm,
-                bottom_lift_distance: config.first_exposure_config.lift_distance,
-                bottom_lift_speed: config.first_exposure_config.lift_speed.convert(),
-                bottom_retract_distance: config.first_exposure_config.lift_distance,
-                bottom_retract_speed: config.first_exposure_config.retract_speed.convert(),
+            bottom_exposure_time: config.first_exposure_config.exposure_time,
+            bottom_after_retract_time: config.first_exposure_config.exposure_delay,
+            bottom_light_pwm: config.first_exposure_config.pwm,
+            bottom_lift_distance: config.first_exposure_config.lift_distance,
+            bottom_lift_speed: config.first_exposure_config.lift_speed.convert(),
+            bottom_retract_distance: config.first_exposure_config.lift_distance,
+            bottom_retract_speed: config.first_exposure_config.retract_speed.convert(),
 
-                file_time: SizedString::new(save_time.as_bytes()),
-                ..Default::default()
-            },
-            layers,
-        )
+            file_time: SizedString::new(save_time.as_bytes()),
+            ..Default::default()
+        };
+
+        if firmware_controls_motion(config) {
+            let distance = Milimeters::new(FIRMWARE_MOTION_PLACEHOLDER);
+            let speed = MilimetersPerMinute::new(FIRMWARE_MOTION_PLACEHOLDER);
+            header.per_layer_settings = false;
+            header.printer_name = SizedString::new(b"ELEGOO Saturn 4 Ultra 16K");
+            header.printer_type = SizedString::new(b"ELEGOO Saturn 4 Ultra");
+            header.profile_name = SizedString::new(b"Saturn 4 Ultra 16K");
+            header.lift_distance = distance;
+            header.lift_speed = speed;
+            header.retract_distance = distance;
+            header.retract_speed = speed;
+            header.bottom_lift_distance = distance;
+            header.bottom_lift_speed = speed;
+            header.bottom_retract_distance = distance;
+            header.bottom_retract_speed = speed;
+        }
+
+        Self::new(header, layers)
     }
 
     pub fn serialize<T: Serializer>(&self, ser: &mut T) {

@@ -22,7 +22,7 @@ use tools::supports::{
     generate::{reroute, reroute_all},
     mesh::{FaceMap, SupportMesh},
     routing::Router,
-    settings::SupportSettings,
+    settings::{SupportSettings, SupportStyle},
 };
 use tracing::{info, warn};
 use wgpu::Device;
@@ -147,11 +147,13 @@ impl Anchor {
 
 impl Supports {
     /// Supports loaded from a project file, which were routed for the model's
-    /// current transform.
+    /// current transform. Supports from older formats that need it are routed
+    /// again.
     pub fn loaded(supports: Vec<Support>, mesh: &Mesh) -> Self {
+        let stale = supports.iter().any(Support::is_stale);
         Self {
             supports,
-            routed_for: Some(Anchor::for_mesh(mesh).key),
+            routed_for: (!stale).then(|| Anchor::for_mesh(mesh).key),
             ..Default::default()
         }
     }
@@ -377,8 +379,11 @@ impl Supports {
     ) {
         let plate_z = anchor.plate_z();
         let column_bottom = settings.column_bottom(plate_z);
+        // Gap fill columns go all the way down to the raft, so they always fit.
         let too_low = |x: &Support| {
-            x.route.foot == Foot::Plate && x.lowest_point() < column_bottom + x.column_radius()
+            x.route.foot == Foot::Plate
+                && x.style != SupportStyle::Fill
+                && x.lowest_point() < column_bottom + x.column_radius()
         };
 
         if !self.supports.iter().any(too_low) {

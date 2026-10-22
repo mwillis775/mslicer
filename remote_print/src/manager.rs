@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clone_macro::clone;
-use common::{misc::random_string, slice::format::RasterFormat};
+use common::{
+    misc::random_string,
+    slice::format::{CtbFormat, RasterFormat},
+};
 use parking_lot::Mutex;
 use serde::Serialize;
 use soon::Soon;
@@ -52,6 +55,12 @@ pub struct Client {
 
     pub print_info: PrintInfo,
     pub transfer_info: FileTransferInfo,
+
+    pub has_camera: bool,
+    /// Camera stream URL, or why it couldn't be started.
+    pub video_url: Option<Result<String, String>>,
+    /// Format sliced files should be sent to this printer in.
+    pub format: RasterFormat,
 }
 
 impl RemotePrintManager {
@@ -148,6 +157,7 @@ impl RemotePrintManagerInner {
         data: Arc<Vec<u8>>,
         mut filename: String,
         format: RasterFormat,
+        print_after: bool,
     ) -> Result<()> {
         (!filename.is_empty()).then(|| filename.push('_'));
         filename.push_str(&random_string(8));
@@ -156,7 +166,7 @@ impl RemotePrintManagerInner {
 
         match self.protocol_version(mainboard).unwrap() {
             ProtocolVersion::V1 => self.v1.upload(mainboard, data, filename),
-            ProtocolVersion::V3 => self.v3.upload(mainboard, data, filename),
+            ProtocolVersion::V3 => self.v3.upload(mainboard, data, filename, print_after),
         }
     }
 
@@ -185,6 +195,13 @@ impl RemotePrintManagerInner {
         match self.protocol_version(mainboard).unwrap() {
             ProtocolVersion::V1 => self.v1.stop_print(mainboard),
             ProtocolVersion::V3 => self.v3.stop_print(mainboard),
+        }
+    }
+
+    pub fn enable_video(&self, mainboard: &str, enable: bool) -> Result<()> {
+        match self.protocol_version(mainboard) {
+            Some(ProtocolVersion::V3) => self.v3.enable_video(mainboard, enable),
+            _ => bail!("Printer `{mainboard}` does not support video streaming."),
         }
     }
 
@@ -259,6 +276,10 @@ impl Client {
             protocol_version: ProtocolVersion::V1,
             print_info: status.print_info.clone(),
             transfer_info: status.file_transfer_info.clone(),
+
+            has_camera: false,
+            video_url: None,
+            format: RasterFormat::Ctb(CtbFormat::Encrypted),
         }
     }
 
@@ -271,6 +292,13 @@ impl Client {
             protocol_version: ProtocolVersion::V3,
             print_info: status.print_info.clone(),
             transfer_info: client.transfer_info.clone(),
+
+            has_camera: attributes.has_camera(),
+            video_url: client.video_url.clone(),
+            format: match attributes.supports_goo() {
+                true => RasterFormat::Goo,
+                false => RasterFormat::Ctb(CtbFormat::Encrypted),
+            },
         })
     }
 }

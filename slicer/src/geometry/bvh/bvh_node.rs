@@ -8,6 +8,7 @@ use crate::{
     geometry::{
         Hit, Primitive,
         bvh::{LEAF_SIZE, Ray},
+        primitive,
         triangle::{closest_point, segment_triangle_distance_sq, triangle_intersection},
     },
     mesh::{Mesh, MeshInner},
@@ -76,6 +77,31 @@ impl BvhNode {
                 } else if let Some((_, child)) = left.or(right) {
                     arena[child].intersect::<Type>(arena, mesh, ray, out);
                 }
+            }
+        }
+    }
+
+    /// See [`super::Bvh::ray_winding`].
+    pub fn winding(&self, arena: &[BvhNode], mesh: &Mesh, ray: Ray, out: &mut i32) {
+        if self.bounds().intersect::<primitive::Ray>(ray).is_none() {
+            return;
+        }
+
+        match self {
+            BvhNode::Leaf { faces, .. } => faces.iter().for_each(|&face| {
+                let normal = mesh.normal(face);
+                let triangle = (mesh.face_verts_raw(face), normal);
+                if triangle_intersection::<primitive::Ray>(triangle, ray).is_some() {
+                    *out += if normal.dot(&ray.direction) > 0.0 {
+                        1
+                    } else {
+                        -1
+                    };
+                }
+            }),
+            BvhNode::Node { left, right, .. } => {
+                arena[*left].winding(arena, mesh, ray, out);
+                arena[*right].winding(arena, mesh, ray, out);
             }
         }
     }

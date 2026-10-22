@@ -8,7 +8,10 @@ use common::serde::{Deserializer, Serializer};
 ///
 /// 1. Initial version.
 /// 2. Support styles, tree settings and per-point shaft radii.
-pub const FORMAT_VERSION: u16 = 2;
+/// 3. Gap fill settings and fill columns.
+/// 4. Fills are stored as the shape of the whole gap, see
+///    [`crate::supports::fill`].
+pub const FORMAT_VERSION: u16 = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SupportSettings {
@@ -23,6 +26,7 @@ pub struct SupportSettings {
     pub base: BaseSettings,
     pub bracing: BracingSettings,
     pub tree: TreeSettings,
+    pub gap_fill: GapFillSettings,
     /// Number of segments used around the circumference of each support.
     pub resolution: u32,
 }
@@ -118,6 +122,17 @@ pub struct TreeSettings {
     pub max_trunk_diameter: f32,
 }
 
+/// Spots that can't be supported normally (a gap too narrow for a support
+/// tip, or a pocket with no way out to the build plate) can instead be filled
+/// in with solid resin, from the overhang down to whatever is below it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GapFillSettings {
+    pub enabled: bool,
+    /// Gaps taller than this are left alone, so whole cavities aren't filled.
+    /// Zero for no limit.
+    pub max_height: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportStyle {
     /// A vertical column with a tapered tip and a flared base.
@@ -133,6 +148,10 @@ pub enum SupportStyle {
     /// A single long taper from a thick base to a fine tip. Stiff, but easy to
     /// snap off.
     Needle,
+    /// A solid column filling a gap between the model and the surface below
+    /// it, see [`GapFillSettings`]. Only made by gap filling, never picked as
+    /// the style for new supports.
+    Fill,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +209,8 @@ impl SupportSettings {
         tree.merge_distance = tree.merge_distance.max(0.0);
         tree.max_trunk_diameter = tree.max_trunk_diameter.max(self.size.shaft_diameter);
 
+        self.gap_fill.max_height = self.gap_fill.max_height.max(0.0);
+
         self.resolution = self.resolution.clamp(6, 64);
     }
 
@@ -222,7 +243,7 @@ impl SupportSettings {
         };
 
         match style {
-            SupportStyle::Standard => {}
+            SupportStyle::Standard | SupportStyle::Fill => {}
             // Branches need some height to merge in.
             SupportStyle::Tree => out.placement.lift = 8.0,
             SupportStyle::Lattice => {
@@ -316,6 +337,9 @@ impl SupportSettings {
         ser.write_f32_be(tree.max_trunk_diameter);
 
         ser.write_u32_be(self.resolution);
+
+        ser.write_bool(self.gap_fill.enabled);
+        ser.write_f32_be(self.gap_fill.max_height);
     }
 
     /// Reads settings written in the given [`FORMAT_VERSION`].
@@ -369,7 +393,14 @@ impl SupportSettings {
                 }
             },
             resolution: des.read_u32_be(),
+            gap_fill: GapFillSettings::default(),
         };
+        if format >= 3 {
+            out.gap_fill = GapFillSettings {
+                enabled: des.read_bool(),
+                max_height: des.read_f32_be(),
+            };
+        }
         out.sanitize();
         out
     }
@@ -417,6 +448,7 @@ impl SupportStyle {
             Self::Lattice => "Lattice",
             Self::Mini => "Mini Needle",
             Self::Needle => "Thick Needle",
+            Self::Fill => "Gap Fill",
         }
     }
 
@@ -437,6 +469,9 @@ impl SupportStyle {
             Self::Needle => {
                 "A single long taper from a thick base to a fine tip. Stiff like a heavy support, but with a small contact mark."
             }
+            Self::Fill => {
+                "A solid column filling a gap that couldn't be supported normally. Becomes part of the print."
+            }
         }
     }
 
@@ -456,6 +491,7 @@ impl SupportStyle {
             2 => Self::Lattice,
             3 => Self::Mini,
             4 => Self::Needle,
+            5 => Self::Fill,
             _ => Self::Standard,
         }
     }
@@ -478,7 +514,7 @@ impl SizePreset {
         // (tip diameter, tip length, shaft diameter) for light, medium and
         // heavy supports.
         let table = match style {
-            SupportStyle::Standard | SupportStyle::Lattice => {
+            SupportStyle::Standard | SupportStyle::Lattice | SupportStyle::Fill => {
                 [(0.3, 1.5, 0.7), (0.45, 2.0, 1.0), (0.65, 2.5, 1.5)]
             }
             SupportStyle::Tree => [(0.3, 1.5, 0.6), (0.4, 2.0, 0.8), (0.6, 2.5, 1.2)],
@@ -497,6 +533,15 @@ impl SizePreset {
 
     pub fn matching(size: &SupportSize, style: SupportStyle) -> Option<Self> {
         Self::ALL.into_iter().find(|x| x.size(style) == *size)
+    }
+}
+
+impl Default for GapFillSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_height: 5.0,
+        }
     }
 }
 
@@ -546,6 +591,7 @@ impl Default for SupportSettings {
                 max_distance: 12.0,
             },
             tree: TreeSettings::default(),
+            gap_fill: GapFillSettings::default(),
             resolution: 12,
         }
     }
